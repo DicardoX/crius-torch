@@ -2,7 +2,7 @@
 # -*- coding:utf-8 -*-
 # Author: Chunyu Xue
 
-""" Implementation of multi-task execution compiler in PEFT scenarios. """
+""" Implementation of Torch-like model compiler. """
 
 from typing import (Any, List, Tuple, Callable)
 from dataclasses import dataclass
