@@ -16,7 +16,7 @@ To install the editable alpha version of crius from source:
 ```bash
 git clone --recursive https://github.com/DicardoX/crius-torch.git
 conda activate crius
-cd crius; pip install -e .
+pip install -e .
 # Check installation
 python -c "import crius;crius.check_installation()"
 ```
