@@ -16,6 +16,9 @@ __all__ = [
 class ParallelismPlan:
     """ Parallelism plan for hybrid model parallelism. """
 
+    pipeline_type: str = "1f1b"
+    """ Type of pipeline parallelism. """
+
     pipeline_parallel_degree: int = 1
     """ Degree of pipeline parallelism. """
     
