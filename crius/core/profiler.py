@@ -58,28 +58,40 @@ class CriusDistProfiler:
         )
         graph = compile(model, compile_configs)
 
-        # Step 2. Query per-operator latency
+        # Step 2. Query and record per-operator latencies
+        graph = self._query_operator_latencies_ms(graph)
+        for node in graph.nodes:
+            logger.debug(f"=====> Node target: {node.target}")
+            logger.debug(f"Node name: {node.name} | OP type: {node.op} | " + 
+                         f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
+                         f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
+
+        # Step 3. Computing per-stage latency
+        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)        
+
+    def _query_operator_latencies_ms(self, graph: IRGraph):
+        """ Query operator latencies(ms) from offline profiled data. """
+
         for node in graph.nodes:
             if node.op == "call_module":
-                setattr(node, "latency", self._query_operator_latency_ms(node))
+                node_latency = 1.0
+                if self._profiled_data is not None:
+                    # Query the latency from the profiled data
+                    raise NotImplementedError()
+                
+                setattr(node, "latency", node_latency)
+            
             else:
                 setattr(node, "latency", None)
 
-        for node in graph.nodes:
-            print(f"\n=====> Node target: {node.target}")
-            print(f"Node: {node.name} | Node class: {node.__class__} | OP type: {node.op} | " + 
-                  f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
-                  f"Output shapes: {node.output_shapes} | Latency: {node.latency}")
+        return graph
 
-        # Step 3. Computing per-stage latency
+    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan) -> None:
+        """ Compute per-stage latencies. 
+        
+        TODO(chunyu): Currently only supports forward pass, backward pass can be estimated by 2x forward pass. 
+        """
+
         stage_latencies = [0.0] * parallelism_plan.pipeline_parallel_degree
         for node in graph.nodes:
             raise NotImplementedError()
-
-    def _query_operator_latency_ms(self, node: IRNode):
-        """ Query operator latency(ms) from offline profiled data. """
-        
-        if self._profiled_data is None:
-            return 1.0   # For debug
-
-        NotImplementedError()
