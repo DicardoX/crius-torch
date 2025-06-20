@@ -14,7 +14,8 @@ import torch
 from torch import nn
 
 from crius.loader import (ModelLoader, ShadowModelLoader)
-from crius.compile import (compile, CompileConfigs)
+from crius.core.profiler import CriusDistProfiler
+from crius.model_parallel.utils import ParallelismPlan
 
 
 class ToyLayer(nn.Module):
@@ -60,19 +61,19 @@ def model_provider(hidden_size: int, num_layers: int, device: str) -> nn.Module:
     return ToyModel(hidden_size, num_layers, device)
 
 
-class TorchModelCompileTest(unittest.TestCase):
-    """ Basic torch model compilation test cases.
+class TorchModelProfileTest(unittest.TestCase):
+    """ Basic torch model disaggregated profiling test cases.
     
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    def test_torch_model_compilation(self):
-        """ Compile a naive torch model into IR and parse its computation operators. """
+    def test_torch_model_profiling(self):
+        """ Profile a naive torch model. """
         
         global_bs = 4
-        seq_len = 4
+        seq_len = 16
         num_micro_batches = 2
-        hidden_size = 4
+        hidden_size = 128
         num_layers = 4
         dtype = torch.float16
         device = "cuda:0"
@@ -94,17 +95,17 @@ class TorchModelCompileTest(unittest.TestCase):
         
         # Inputs
         data = [
-            torch.randn(global_bs, seq_len, hidden_size, dtype=dtype, device=device)
+            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
                 for _ in range(num_micro_batches)
         ]
         
-        # Compile 
-        compile_configs = CompileConfigs(
+        # Profile
+        profiler = CriusDistProfiler()
+        profiler.profile(
+            model=model,
             base_input_args=(data[0], ),
-            parallelism_plan="tensor",
-            parallelism_degree=2,
+            parallelism_plan=ParallelismPlan(tensor_parallel_degree=2),
         )
-        compiled_model = compile(model, compile_configs)
 
 
 if __name__ == '__main__':

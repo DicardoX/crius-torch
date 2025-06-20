@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+# Author: Chunyu Xue
+
+""" Utility functions for model parallelism. """
+
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+
+__all__ = [
+    "ParallelismPlan",
+]
+
+
+@dataclass
+class ParallelismPlan:
+    """ Parallelism plan for hybrid model parallelism. """
+
+    pipeline_parallel_degree: int = 1
+    """ Degree of pipeline parallelism. """
+    
+    tensor_parallel_degree: int = 1
+    """ Degree of tensor parallelism. """
+
+    data_parallel_degree: int = 1
+    """ Degree of data parallelism. """
+
+    op_to_layer_mapping: Dict[str, int] = None
+    """ Mapping from operator name to layer index.
+    `{"fc1": 0, "fc2": 1}` means `fc1` is in layer 0 and `fc2` is in layer 1"""
+
+    layer_to_stage_mapping: List[List[int]] = None
+    """ Mapping from layer index to stage index. 
+    `[[0, 1], [2, 3]]` means layer 0/1 are in stage 0 and layer 2/3 are in stage 1. """

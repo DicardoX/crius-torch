@@ -12,9 +12,11 @@ from torch import nn
 import torch._dynamo as dynamo
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
+from crius.model_parallel.utils import ParallelismPlan
 
 __all__ = [
     "transform_to_ir_graph",
+    "propagate_node_shapes",
     "insert_comm_primitives_into_graph",
 ]
 
@@ -35,17 +37,47 @@ def transform_to_ir_graph(
     return graph
 
 
+def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
+    """ Propagate per-node input/output shapes in the IR graph. 
+    
+    Args:
+        graph: IR graph to propagate shapes.
+        input_args: Input arguments of the model `.forward()` for shape propagation.
+    """
+    from torch.fx.passes.shape_prop import ShapeProp
+    
+    ShapeProp(graph.owning_module).propagate(*input_args)
+    graph = graph.owning_module.graph
+    for node in graph.nodes:
+        # Input shapes
+        input_shapes = []
+        for arg in node.args:
+            if isinstance(arg, torch.fx.node.Node) and hasattr(arg, 'meta') and 'tensor_meta' in arg.meta:
+                input_shapes.append(arg.meta['tensor_meta'].shape)
+        setattr(node, 'input_shapes', input_shapes)
+        
+        # Output shapes
+        if hasattr(node, 'meta') and 'tensor_meta' in node.meta:
+            tensor_meta = node.meta['tensor_meta']
+            if not isinstance(tensor_meta, list):
+                tensor_meta = [tensor_meta]
+            output_shapes = [_meta.shape for _meta in tensor_meta if hasattr(_meta, 'shape')]
+        else:
+            output_shapes = []
+        setattr(node, 'output_shapes', output_shapes)
+    
+    return graph
+
+
 def insert_comm_primitives_into_graph(
     graph: IRGraph,
-    parallelism_plan: str,
-    parallelism_degree: int,
+    parallelism_plan: ParallelismPlan,
  ) -> IRGraph:
     """ Insert IR nodes of communication primitives in IR graph, based on the parallelism plan. 
     
     Args:
         graph: IR graph to be inserted with communication primitives.
         parallelism_plan: How the to-be-compiled model would be parallelized.
-        parallelism_degree: Degree of the specified parallelism plan.
     """
     # TODO(chunyu): Implement this function.
     return graph

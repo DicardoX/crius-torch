@@ -11,8 +11,10 @@ import torch
 from torch import nn
 from torch.fx import GraphModule
 
-from crius.compile.graph.transform import (transform_to_ir_graph, insert_comm_primitives_into_graph)
+from crius.compile.graph.transform import (
+    transform_to_ir_graph, propagate_node_shapes, insert_comm_primitives_into_graph)
 from crius.compile.graph.graph import (IRNode, IRGraph)
+from crius.model_parallel.utils import ParallelismPlan
 
 __all__ = [
     "CompileConfigs",
@@ -27,36 +29,26 @@ class CompileConfigs:
     base_input_args: Tuple[Any]
     """ Input arguments of model `.forward()` for IR graph transformation. """
 
-    parallelism_plan: str
-    """ Parallelism plan of the model. TODO(chunyu): support inter-stage hybrid parallelism. """
-
-    parallelism_degree: int
-    """ Degree of the parallelism plan (e.g., 2 for 2-GPU tensor parallelism). """
+    parallelism_plan: ParallelismPlan
+    """ Parallelism plan of the model. """
 
 
 def compile(
     model: nn.Module,
     compile_configs: CompileConfigs,
-) -> Any:
-    """ Python-to-python compilation. 
+) -> IRGraph:
+    """ Python-to-IR compilation. 
     
     Args:
         model: Torch-like model to be compiled.
         compile_configs: Compilation configurations.
     """
+    
     # Step 1. Transform model into IR graph
     graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
-    
-    # Step 2. Insert communication primitives
-    graph = insert_comm_primitives_into_graph(
-        graph, compile_configs.parallelism_plan, compile_configs.parallelism_degree,
-    )
+    # Step 2. Propagate per-node input/output shapes
+    graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
+    # Step 3. Insert communication primitives
+    graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan)
 
-    for node in graph.nodes:
-        print(f"Node: {node.name} | Node class: {node.__class__} | OP type: {node.op} | Next: {node.next} | Tar")
-
-    print(graph.owning_module)
-    print(graph.owning_module.__class__)
-    print(graph.python_code(root_module="self"))
-
-    print(graph._codegen)
+    return graph

@@ -45,9 +45,9 @@ class IRNode(fx.Node):
         kwargs: Dict[str, Argument],
         return_type: Optional[Any] = None,
     ) -> None:
-        """ Initialize a IR node object. """
-
         super().__init__(graph, name, op, target, args, kwargs, return_type)
+        # Profiled
+        self.latency: Optional[float] = None
 
 
 class IRGraph(fx.Graph):
