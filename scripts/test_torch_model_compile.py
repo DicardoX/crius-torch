@@ -13,6 +13,7 @@ import time
 import torch
 from torch import nn
 
+from crius.loader import (ModelLoader, ShadowModelLoader)
 from crius.compile import (compile, CompileConfigs)
 
 
@@ -38,7 +39,7 @@ class ToyModel(nn.Module):
         super().__init__()
         self.device = device
         self.num_layers = num_layers
-        self.layers = [ToyLayer(hidden_size, device) for _ in range(num_layers)]
+        self.layers = nn.ModuleList([ToyLayer(hidden_size, device) for _ in range(num_layers)])
         self.layer_norm = nn.LayerNorm(hidden_size, device=device)
         
     def _gemm_op(self, hidden_states: torch.Tensor, layer_index: int) -> torch.Tensor:
@@ -52,6 +53,11 @@ class ToyModel(nn.Module):
         for i in range(self.num_layers):
             hidden_states = self._gemm_op(hidden_states, i)
         return self.layer_norm(hidden_states)
+
+
+def model_provider(hidden_size: int, num_layers: int, device: str) -> nn.Module:
+    """ Model provider function. """
+    return ToyModel(hidden_size, num_layers, device)
 
 
 class TorchModelCompileTest(unittest.TestCase):
@@ -72,7 +78,20 @@ class TorchModelCompileTest(unittest.TestCase):
         device = "cuda:0"
 
         # Model
-        model = ToyModel(hidden_size, num_layers, device)
+        # _model_loader_class = ModelLoader
+        _model_loader_class = ShadowModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+            },
+            # device_str=device,
+            fake_device_str=device,
+        )
+        model = model_loader.load()
+        
         # Inputs
         data = [
             torch.randn(global_bs, seq_len, hidden_size, dtype=dtype, device=device)
@@ -86,7 +105,6 @@ class TorchModelCompileTest(unittest.TestCase):
             parallelism_degree=2,
         )
         compiled_model = compile(model, compile_configs)
-
 
 
 if __name__ == '__main__':
