@@ -21,6 +21,9 @@ class ParallelismPlan:
 
     pipeline_parallel_degree: int = 1
     """ Degree of pipeline parallelism. """
+
+    num_microbatches: int = 1
+    """ Number of microbatches in pipeline parallelism. """
     
     tensor_parallel_degree: int = 1
     """ Degree of tensor parallelism. """

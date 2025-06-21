@@ -102,10 +102,54 @@ class CriusDistProfiler:
 
         stage_latencies = [0.0] * parallelism_plan.pipeline_parallel_degree
         for node in graph.nodes:
-            raise NotImplementedError()
+            layer_index = parallelism_plan.op_to_layer_mapping.get(node.target, None)
+            if layer_index is None:
+                continue
+            stage_index = next(
+                (i for i, stage in enumerate(parallelism_plan.layer_to_stage_mapping) if layer_index in stage), None
+            )
+            # Accumulate latency
+            if node.latency is not None and stage_index is not None:
+                stage_latencies[stage_index] += node.latency
+
+        return stage_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
         self, stage_latencies: List[float], parallelism_plan: ParallelismPlan,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
+        
+        if parallelism_plan.pipeline_type == "1f1b":
+            return self._model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
+                stage_latencies, parallelism_plan,
+            )
+        else:
+            raise ValueError(f"Pipeline type {parallelism_plan.pipeline_type} is not supported yet.")
+    
+    def _model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
+        self, stage_latencies: List[float], parallelism_plan: ParallelismPlan,
+    ) -> Optional[float]:
+        """ 1F1B pipeline schedule. 
+
+                   Warmup |         Steady          | Drain
+        clock num    0    |   1     2     3     4   |   5
+        ---------  -----  | ----- ----- ----- ----- | -----
+         stage 0   (0,0)  | (0,1)       (0,2)       | (0,3)
+         stage 1          | (1,0) (1,2) (1,1) (1,3) |
+
+        where `(i,j)` denotes stage `i` executes micro-batch `j` when `j < #micro-batches`,
+        and denotes stage `i` executes micro-batch `j - #micro-batches` when `j >= #micro-batches`.
+
+        Note that the backward pass's latency is 2x of the forward pass.
+        """
+        
+        num_microbatches = parallelism_plan.num_microbatches
+        num_stages = parallelism_plan.pipeline_parallel_degree
+
+        # Phase 1. Warmup
+
+        # Phase 2. Steady
+
+        # Phase 3. Drain
+
         raise NotImplementedError()

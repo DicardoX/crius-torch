@@ -98,13 +98,36 @@ class TorchModelProfileTest(unittest.TestCase):
             torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
                 for _ in range(num_micro_batches)
         ]
-        
+
+        # Parallelism plan
+        # TODO(chunyu): Currently we manually specify the mappings
+        op_to_layer_mapping = {
+            'L__self___layers_0_fc1': 0,
+            'L__self___layers_0_fc2': 0,
+            'L__self___layers_1_fc1': 1,
+            'L__self___layers_1_fc2': 1,
+            'L__self___layers_2_fc1': 2,
+            'L__self___layers_2_fc2': 2,
+            'L__self___layers_3_fc1': 3,
+            'L__self___layers_3_fc2': 3,
+            'L__self___layer_norm': 3,
+        }
+        layer_to_stage_mapping = [[0, 1], [2, 3]]
+        parallelism_plan = ParallelismPlan(
+            pipeline_type="1f1b",
+            pipeline_parallel_degree=2,
+            num_microbatches=num_micro_batches,
+            tensor_parallel_degree=2,
+            data_parallel_degree=1,
+            op_to_layer_mapping=op_to_layer_mapping,
+            layer_to_stage_mapping=layer_to_stage_mapping,
+        )
         # Profile
         profiler = CriusDistProfiler()
         profiler.profile(
             model=model,
             base_input_args=(data[0], ),
-            parallelism_plan=ParallelismPlan(tensor_parallel_degree=2),
+            parallelism_plan=parallelism_plan,
         )
 
 
