@@ -8,6 +8,7 @@ This module is independent to the underlying training backend (e.g., Megatron).
 """
 
 from typing import (Any, Tuple, Optional, List)
+import numpy as np
 
 import torch
 from torch import nn
@@ -83,7 +84,7 @@ class CriusDistProfiler:
 
         for node in graph.nodes:
             if node.op == "call_module":
-                node_latency = 1.0
+                node_latency = 100.0   # Default latency in milliseconds for debug
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
                     raise NotImplementedError()
@@ -94,13 +95,10 @@ class CriusDistProfiler:
 
         return graph
 
-    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan) -> None:
-        """ Compute per-stage latencies. 
-        
-        TODO(chunyu): Currently only supports forward pass, backward pass can be estimated by 2x forward pass. 
-        """
+    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan) -> List[List[float]]:
+        """ Compute per-stage latencies. """
 
-        stage_latencies = [0.0] * parallelism_plan.pipeline_parallel_degree
+        stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for node in graph.nodes:
             layer_index = parallelism_plan.op_to_layer_mapping.get(node.target, None)
             if layer_index is None:
@@ -110,12 +108,16 @@ class CriusDistProfiler:
             )
             # Accumulate latency
             if node.latency is not None and stage_index is not None:
-                stage_latencies[stage_index] += node.latency
+                stage_latencies[stage_index][0] += node.latency
+        
+        # For backward pass, we assume the latency is 2x of the forward pass.
+        for i in range(parallelism_plan.pipeline_parallel_degree):
+            stage_latencies[i][1] = stage_latencies[i][0] * 2.0
 
         return stage_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
-        self, stage_latencies: List[float], parallelism_plan: ParallelismPlan,
+        self, stage_latencies: List[List[float]], parallelism_plan: ParallelismPlan,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
         
@@ -147,9 +149,14 @@ class CriusDistProfiler:
         num_stages = parallelism_plan.pipeline_parallel_degree
 
         # Phase 1. Warmup
+        t_warmup = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])
 
         # Phase 2. Steady
+        # NOTE: Here, we assume perfect load balancing across pipeline stages. Therefore, we use 
+        #       the last stage's latency refer to DynaPipe's Figure 10.
+        t_steady = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1])
 
         # Phase 3. Drain
+        t_drain = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)])
 
-        raise NotImplementedError()
+        return (t_warmup + t_steady + t_drain)

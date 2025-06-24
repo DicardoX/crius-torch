@@ -124,11 +124,13 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         # Profile
         profiler = CriusDistProfiler()
-        profiler.profile(
+        e2e_latency = profiler.profile(
             model=model,
             base_input_args=(data[0], ),
             parallelism_plan=parallelism_plan,
         )
+
+        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency / 1e3):.3f} seconds")
 
 
 if __name__ == '__main__':
