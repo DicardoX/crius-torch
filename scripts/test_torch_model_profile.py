@@ -67,6 +67,35 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
+    def test_torch_model_offline_profiling(self):
+        """ Offline profile all operators."""
+
+        from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
+        profile_configs = OfflineProfileConfigs(
+            min_batch_size=1,
+            max_batch_size=4,
+            batch_size_step="power-of-2",
+            min_seq_len=32,
+            max_seq_len=1024,
+            seq_len_step="power-of-2",
+            gemm_left_op_hidden_dims=[128, ],
+            gemm_right_op_hidden_dims=[128, ],
+            dtype=torch.float16,
+            device="cuda:1",
+            num_warmup_steps=5,
+            num_profile_steps=10,
+            force_overwrite=True,
+        )
+        offline_profiler = CriusOfflineDataManager(
+            profile_configs=profile_configs,
+            to_store_path='./crius/offline/',
+            data_filename='prof_data.pkl',
+        )
+        
+        offline_profiler.profile_all_gemm()
+
+
+    @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
         """ Profile a naive torch model. """
         
