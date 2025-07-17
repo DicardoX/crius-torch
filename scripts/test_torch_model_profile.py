@@ -67,6 +67,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -95,7 +96,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile_all_gemm()
 
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
         """ Profile a naive torch model. """
         

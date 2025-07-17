@@ -9,6 +9,7 @@ This module is independent to the underlying training backend (e.g., Megatron).
 
 from typing import (Any, Tuple, Optional, List)
 import numpy as np
+import pickle
 
 import torch
 from torch import nn
@@ -37,7 +38,12 @@ class CriusDistProfiler:
             logger.warning(f"No profiled data path provided, using latencies of all 1.0ms for debug.\n\n")
             return None
         
-        raise NotImplementedError()
+        with open(profiled_data_path, 'rb') as f:
+            self._profiled_data = pickle.load(f)
+
+        print(self._profiled_data)
+        exit(0)
+
 
     def profile(
         self, model: nn.Module, 
