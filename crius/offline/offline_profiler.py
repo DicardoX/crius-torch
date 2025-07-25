@@ -107,7 +107,7 @@ class CriusOfflineDataManager:
             os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
             logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
         
-        self.data = None
+        self.data = {}
         self._load()
     
     def profile_all_gemm(

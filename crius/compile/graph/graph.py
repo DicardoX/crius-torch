@@ -66,6 +66,9 @@ class IRGraph(fx.Graph):
         self._root: IRNode = IRNode(self, "", "root", "", (), {})
         self._insert = self._root.prepend   # Iterating direction is `_prev` in `g.nodes`
 
+    def __len__(self) -> int:
+        return len(self.nodes)
+        
     def node_copy(
         self, node: fx.Node, arg_transform: Callable[[IRNode], Argument] = ...
     ) -> IRNode:
