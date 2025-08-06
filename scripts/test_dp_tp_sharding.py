@@ -8,7 +8,7 @@ import torch.distributed as dist
 bs = 16
 seq_len = 2048
 hidden_size = 4096
-num_shards = 2
+num_shards = 4
 
 
 def gemm_profile(gemm_op: nn.Module, inputs: torch.Tensor) -> float:
@@ -68,7 +68,7 @@ def allreduce_profile(data: torch.Tensor, rank: int) -> float:
 if __name__ == "__main__":
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    profile_gemm = False
+    profile_gemm = True
     if profile_gemm:
         torch.cuda.set_device(0)
         # ---------->  DP: slicing along batch dimension

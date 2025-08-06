@@ -12,7 +12,7 @@ from torch import nn
 from torch.fx import GraphModule
 
 from crius.compile.graph.transform import (
-    transform_to_ir_graph, propagate_node_shapes, insert_comm_primitives_into_graph)
+    transform_to_ir_graph, propagate_node_shapes, infer_node_layer_types, insert_comm_primitives_into_graph)
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
 
@@ -48,6 +48,7 @@ def compile(
     graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
     # Step 2. Propagate per-node input/output shapes
     graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
+    graph = infer_node_layer_types(graph)
     # Step 3. Insert communication primitives
     graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan)
 

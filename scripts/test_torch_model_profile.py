@@ -95,13 +95,12 @@ class TorchModelProfileTest(unittest.TestCase):
         
         offline_profiler.profile_all_gemm()
 
-
     # @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
         """ Profile a naive torch model. """
         
-        global_bs = 4
-        seq_len = 16
+        global_bs = 8
+        seq_len = 128
         num_micro_batches = 2
         hidden_size = 128
         num_layers = 4
@@ -142,25 +141,28 @@ class TorchModelProfileTest(unittest.TestCase):
             'L__self___layers_3_fc2': 3,
             'L__self___layer_norm': 3,
         }
-        layer_to_stage_mapping = [[0, 1], [2, 3]]
+        layer_to_stage_mapping = [[0, 1, 2, 3]]
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
-            pipeline_parallel_degree=2,
+            pipeline_parallel_degree=1,
             num_microbatches=num_micro_batches,
-            tensor_parallel_degree=2,
+            tensor_parallel_degree=1,
             data_parallel_degree=1,
             op_to_layer_mapping=op_to_layer_mapping,
             layer_to_stage_mapping=layer_to_stage_mapping,
         )
         # Profile
-        profiler = CriusDistProfiler()
+        profiler = CriusDistProfiler(
+            profiled_data_path='./crius/offline/prof_data.pkl',
+        )
         e2e_latency = profiler.profile(
             model=model,
             base_input_args=(data[0], ),
             parallelism_plan=parallelism_plan,
+            only_forward=True,
         )
 
-        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency / 1e3):.3f} seconds")
+        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
 
 if __name__ == '__main__':
