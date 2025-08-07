@@ -9,6 +9,7 @@ import logging
 from functools import partial
 from collections import OrderedDict
 import time
+import numpy as np
 
 import torch
 from torch import nn
@@ -163,6 +164,41 @@ class TorchModelProfileTest(unittest.TestCase):
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+
+        ################# Real profiling #################
+        _model_loader_class = ModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+            },
+            device_str=device,
+        )
+        model = model_loader.load()
+
+        # Warmup
+        for _ in range(100):
+            _ = model(data[0])
+        torch.cuda.synchronize(device)
+
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+
+        # Measure
+        start_event.record()
+        for _ in range(1000):
+            _ = model(data[0])
+        end_event.record()    
+
+        torch.cuda.synchronize(device)
+        total_time_ms = start_event.elapsed_time(end_event)
+        avg_latency_ms = total_time_ms / 1000     
+        stage_latencies_ms = [avg_latency_ms]
+        measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        
+        print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
 
 if __name__ == '__main__':
