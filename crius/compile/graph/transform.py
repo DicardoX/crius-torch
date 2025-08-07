@@ -19,6 +19,7 @@ from crius.model_parallel.utils import ParallelismPlan
 __all__ = [
     "transform_to_ir_graph",
     "propagate_node_shapes",
+    "infer_node_layer_types",
     "insert_comm_primitives_into_graph",
     "print_model_graph",
     "analyze_graph_performance",
@@ -243,6 +244,31 @@ def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
             output_shapes = []
         setattr(node, 'output_shapes', output_shapes)
     
+    return graph
+
+
+def infer_node_layer_types(graph: IRGraph) -> IRGraph:
+    """ Infer node layer types (e.g., gemm) in the IR graph. 
+
+    NOTE(chunyu): The `node.target` should be strictly named, maybe add pre sanity check at the beginning.
+    
+    Args:
+        graph: IR graph to infer layer types.
+    """
+    for node in graph.nodes:
+        if hasattr(node, 'layer_type'):
+            continue
+        
+        # GEMM
+        if node.op == 'call_module':
+            if (
+                # ------------- String matching rules -------------
+                'fc' in node.target
+            ):
+                setattr(node, 'layer_type', 'gemm')
+            else:
+                setattr(node, 'layer_type', 'unknown')
+
     return graph
 
 

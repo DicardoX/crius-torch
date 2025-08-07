@@ -17,6 +17,7 @@ from torch import nn
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
+from crius.offline.offline_profiler import CriusOfflineDataManager
 from crius.global_envs import logger
 
 
@@ -39,16 +40,14 @@ class CriusDistProfiler:
             return None
         
         with open(profiled_data_path, 'rb') as f:
-            self._profiled_data = pickle.load(f)
-
-        print(self._profiled_data)
-        exit(0)
-
+            profiled_data = pickle.load(f)
+        return profiled_data
 
     def profile(
         self, model: nn.Module, 
         base_input_args: Tuple[Any],
         parallelism_plan: ParallelismPlan,
+        only_forward: bool = False,
     ) -> Optional[float]:
         """ Profile the model. 
         
@@ -56,6 +55,7 @@ class CriusDistProfiler:
             model: Torch-like model to be profiled.
             base_input_args: Input arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
+            only_forward: If True, only profile the forward pass. Default is False.
         
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
@@ -77,11 +77,11 @@ class CriusDistProfiler:
                          f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
 
         # Step 3. Compute per-stage latency
-        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)   
+        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
 
         # Step 4. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
-            stage_latencies, parallelism_plan,
+            stage_latencies, parallelism_plan, only_forward,
         )
         return e2e_latency
 
@@ -90,10 +90,18 @@ class CriusDistProfiler:
 
         for node in graph.nodes:
             if node.op == "call_module":
-                node_latency = 100.0   # Default latency in milliseconds for debug
+                node_latency = 0.0
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
-                    raise NotImplementedError()
+                    input_shapes, output_shapes = node.input_shapes, node.output_shapes
+                    query_key = CriusOfflineDataManager.get_query_key(
+                        op_type=node.layer_type, batch_size=input_shapes[0][0], seq_len=input_shapes[0][1],
+                        left_op_hidden_dim=input_shapes[0][2], right_op_hidden_dim=output_shapes[0][2],
+                    )
+                    if query_key in self._profiled_data:
+                        node_latency = self._profiled_data[query_key]["latency_ms"]
+                    else:
+                        logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
                 
                 setattr(node, "latency", node_latency)
             else:
@@ -123,19 +131,19 @@ class CriusDistProfiler:
         return stage_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
-        self, stage_latencies: List[List[float]], parallelism_plan: ParallelismPlan,
+        self, stage_latencies: List[List[float]], parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
         
         if parallelism_plan.pipeline_type == "1f1b":
             return self._model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-                stage_latencies, parallelism_plan,
+                stage_latencies, parallelism_plan, only_forward,
             )
         else:
             raise ValueError(f"Pipeline type {parallelism_plan.pipeline_type} is not supported yet.")
     
     def _model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-        self, stage_latencies: List[float], parallelism_plan: ParallelismPlan,
+        self, stage_latencies: List[float], parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
 
@@ -153,6 +161,12 @@ class CriusDistProfiler:
         
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree
+
+        if only_forward:
+            # If only forward pass is profiled, we only consider the steady phase.
+            fw_lats = [_l[0] for _l in stage_latencies]
+            t_fw = np.max(fw_lats) * (num_microbatches - 1) + np.sum(fw_lats)
+            return t_fw
 
         # Phase 1. Warmup
         t_warmup = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])

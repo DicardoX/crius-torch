@@ -168,7 +168,7 @@ class CriusOfflineDataManager:
             for seq_len in seq_lens:
                 for left_hidden_dim in gemm_left_op_hidden_dims:
                     for right_hidden_dim in gemm_right_op_hidden_dims:
-                        query_key = self.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
+                        query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
                         if query_key in self.data and not self.configs.force_overwrite:
                             logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
                                         f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
@@ -190,7 +190,8 @@ class CriusOfflineDataManager:
         """ Load the collected profiling data from the specified path. """        
         if not os.path.exists(self._path):
             logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
-            return {}
+            self.data = {}
+            return
         
         if self.data is None:
             with open(self._path, 'rb') as f:
@@ -212,8 +213,9 @@ class CriusOfflineDataManager:
             pickle.dump(self.data, f)
         logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
 
+    @classmethod
     def get_query_key(
-        self, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+        cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
     ) -> str:
         """ Generate a unique query key for the GEMM operation. """
         return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
