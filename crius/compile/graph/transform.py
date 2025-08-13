@@ -12,6 +12,7 @@ import re
 import torch
 from torch import nn
 import torch._dynamo as dynamo
+from torch.fx.passes.shape_prop import TensorMetadata
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
@@ -53,35 +54,44 @@ call_module_core_op_category2 = {
 }
 
 call_function_core_op_category = {
-    'add': 'torch.add / torch.Tensor.__add__',
+    'add': 'torch.add ',
     'arange': 'torch.arange',
-    'aten.sym_size.int': 'torch.Tensor.size / torch.ops.aten.sym_size',
-    'eq': 'torch.eq / torch.Tensor.__eq__',
+    'aten.sym_size.int': 'torch.Tensor.size ',
+    'eq': 'torch.eq ',
     'getitem': 'torch.Tensor.__getitem__',
-    'matmul': 'torch.matmul / x @ y',
-    'mul': 'torch.mul / torch.Tensor.__mul__',
+    'matmul': 'torch.matmul ',
+    'mul': 'torch.mul ',
     'ones': 'torch.ones',
     'tril': 'torch.tril',
+    'cat': 'torch.cat',                            # æ²¿æŒ‡å®šç»´åº¦æ‹¼æ¥å¼ é‡
+    'neg': 'torch.neg',                            # é€å…ƒç´ å–è´Ÿ
+
+    '_enter_autocast': 'torch.cuda.amp.autocast',  # è¿›å…¥è‡ªåŠ¨æ··åˆç²¾åº¦ä¸Šä¸‹æ–‡
+    '_exit_autocast': 'torch.cuda.amp.autocast',   # é€€å‡ºæ··åˆç²¾åº¦ä¸Šä¸‹æ–‡
+    '_set_grad_enabled': 'torch.set_grad_enabled', # æ§åˆ¶æ˜¯å¦å¯åŠ¨æ¢¯åº¦è®¡ç®—
+    'rsqrt': 'torch.rsqrt',                        # é€å…ƒç´ è®¡ç®—1/sqrt(x)
+    'scaled_dot_product_attention': 'F.scaled_dot_product_attention()'
+
 }
 
 
 def extract_op_name(target: str):
     """
-    ÌáÈ¡Ëã×ÓµÄºËĞÄÃû³Æ£¬ºöÂÔ²ã±àºÅ£¬²¢Í³Ò» LayerNorm Ä£¿éÎª 'ln'
-    Í¬Ê±±£Áô mlp_*, attn_* µÈÄ£¿éµÄÏ¸Á£¶ÈÃû³Æ
+    æå–ç®—å­çš„æ ¸å¿ƒåç§°ï¼Œå¿½ç•¥å±‚ç¼–å·ï¼Œå¹¶ç»Ÿä¸€ LayerNorm æ¨¡å—ä¸º 'ln'
+    åŒæ—¶ä¿ç•™ mlp_*, attn_* ç­‰æ¨¡å—çš„ç»†ç²’åº¦åç§°
     """
 
-    # Æ¥Åä Transformer ²ãÄÚÄ£¿é£ºÈç h_0_mlp_c_fc -> mlp_c_fc
+    # åŒ¹é… Transformer å±‚å†…æ¨¡å—ï¼šå¦‚ h_0_mlp_c_fc -> mlp_c_fc
     h_match = re.search(r'h_\d+_(ln_\d+|ln_f|mlp_.+|attn_.+|drop)', target)
     if h_match:
         inner_name = h_match.group(1)
-        # Í³Ò»ËùÓĞ LayerNorm Ä£¿éÎª 'ln'
+        # ç»Ÿä¸€æ‰€æœ‰ LayerNorm æ¨¡å—ä¸º 'ln'
         if inner_name.startswith('ln_') or inner_name == 'ln_f':
             return 'ln'
         else:
-            return inner_name  # ±£Áô mlp_*, attn_*, drop µÈ
+            return inner_name  # ä¿ç•™ mlp_*, attn_*, drop ç­‰
 
-    # Æ¥Åä¶¥²ãÄ£¿é£ºÈç wte¡¢wpe¡¢ln_f¡¢drop
+    # åŒ¹é…é¡¶å±‚æ¨¡å—ï¼šå¦‚ wteã€wpeã€ln_fã€drop
     top_level_match = re.search(r'_(wte|wpe|drop|ln_f)$', target)
     if top_level_match:
         inner_name = top_level_match.group(1)
@@ -89,29 +99,39 @@ def extract_op_name(target: str):
             return 'ln'
         return inner_name
 
+
+    match = re.search(r'modules__\d+___(\w+)', target)
+    if match:
+        return match.group(1)
+    
+    # åŒ¹é…é¡¶å±‚æ¨¡å—ï¼Œå¦‚lm_head
+    if target.startswith("L__self___"):
+        return target[len("L__self___"):] 
+    
+
     return None
 
 
 def clean_target_name(target: str):
     """
-    ÊäÈëÒ»¸ö call_function µÄ target ×Ö·û´®£¨Èç '<built-in function getitem>'£©
-    Êä³öÇåÏ´ºóµÄº¯ÊıÃû£¨Èç 'getitem'£©
-    Ö§³Ö³£¼ûº¯Êı¡¢aten.sym_size.int µÈ
+    è¾“å…¥ä¸€ä¸ª call_function çš„ target å­—ç¬¦ä¸²ï¼ˆå¦‚ '<built-in function getitem>'ï¼‰
+    è¾“å‡ºæ¸…æ´—åçš„å‡½æ•°åï¼ˆå¦‚ 'getitem'ï¼‰
+    æ”¯æŒå¸¸è§å‡½æ•°ã€aten.sym_size.int ç­‰
     """
 
-    # Æ¥Åä aten.sym_size.int
+    # åŒ¹é… aten.sym_size.int
     if 'sym_size' in target:
         return 'aten.sym_size.int'
 
-    # Æ¥Åä built-in function
+    # åŒ¹é… built-in function
     if 'built-in function' in target:
         return target.split('built-in function ')[1].split('>')[0].strip()
 
-    # Æ¥Åä built-in method
+    # åŒ¹é… built-in method
     if 'built-in method' in target:
         return target.split('built-in method ')[1].split(' of ')[0].strip()
 
-    # Æ¥Åä torch.function »ò F.xxx
+    # åŒ¹é… torch.function æˆ– F.xxx
     if 'function' in target:
         func_name = target.split('function ')[1].split(' at ')[0].strip()
         if 'relu' in func_name:
@@ -124,11 +144,13 @@ def clean_target_name(target: str):
             return 'F.dropout'
         return func_name
 
-    # Æ¥Åä torch.ops.xxx
+    # åŒ¹é… torch.ops.xxx
     if 'torch.ops.' in target:
         return target.split('torch.ops.')[1].split(' at ')[0].strip()
+    
+    if target in ('aten._assert_scalar.default', 'aten.sym_constrain_range_for_size.default'):
+        return target
 
-    # Î´Öªº¯Êı
     return 'unknown'        
 
 
@@ -231,7 +253,13 @@ def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
         input_shapes = []
         for arg in node.args:
             if isinstance(arg, torch.fx.node.Node) and hasattr(arg, 'meta') and 'tensor_meta' in arg.meta:
-                input_shapes.append(arg.meta['tensor_meta'].shape)
+                tensor_meta = arg.meta['tensor_meta']
+                if isinstance(tensor_meta, tuple) and  all(isinstance(x, TensorMetadata) for x in tensor_meta):
+                    for meta in tensor_meta:
+                        input_shapes.append(meta.shape)
+                else:
+                    input_shapes.append(tensor_meta.shape)
+
         setattr(node, 'input_shapes', input_shapes)
         
         # Output shapes
@@ -256,18 +284,66 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
         graph: IR graph to infer layer types.
     """
     for node in graph.nodes:
+        target = str(node.target)
         if hasattr(node, 'layer_type'):
             continue
         
         # GEMM
         if node.op == 'call_module':
-            if (
-                # ------------- String matching rules -------------
-                'fc' in node.target
-            ):
+            if 'fc' in target:
                 setattr(node, 'layer_type', 'gemm')
+            elif 'proj' in target:
+                setattr(node, 'layer_type', 'gemm')
+            elif 'qkv' in target:
+                setattr(node, 'layer_type', 'gemm')
+            elif 'lm' in target:
+                setattr(node, 'layer_type', 'gemm')
+            elif 'ln' in target:
+                setattr(node, 'layer_type', 'layernorm')
+            elif 'act' in target:
+                setattr(node, 'layer_type', 'gelu')
+            elif 'drop'  in target:
+                setattr(node, 'layer_type', 'dropout')
+            # elif 'wte' in target:
+            #     setattr(node, 'layer_type', 'embedding')
+            # elif 'wpe' in target:
+            #     setattr(node, 'layer_type', 'embedding')
             else:
+                print(f"unknown call module: {target}")
                 setattr(node, 'layer_type', 'unknown')
+        elif node.op =="call_function":
+            if 'matmul' in target:
+                setattr(node, 'layer_type', 'matmul')
+            elif 'mul' in target:
+                setattr(node, 'layer_type', 'mul')
+            elif 'addmm' in target:
+                setattr(node, 'layer_type', 'addmm')
+            elif 'add' in target:
+                setattr(node, 'layer_type', 'add')
+            elif 'scaled_dot_product_attention' in target:
+                setattr(node, 'layer_type', 'sdpa')
+            elif 'pow' in target:
+                setattr(node, 'layer_type', 'pow')
+            # elif 'eq' in target:
+            #     setattr(node, 'layer_type', 'eq')
+            # elif 'tril' in target:
+            #     setattr(node, 'layer_type', 'tril')
+            else:
+                print(f"unknown call function: {target}")
+                setattr(node, 'layer_type', 'unknown')
+        
+        elif node.op == "call_method":
+            if 'softmax' in target:
+                setattr(node, 'layer_type', 'softmax')
+            elif 'masked_fill' in target:
+                setattr(node, 'layer_type', 'masked_fill')
+            elif 'contiguous' in target:
+                setattr(node, 'layer_type', 'contiguous')
+            else:
+                print(f"unknown call method: {target}")
+                setattr(node, 'layer_type', 'unknown')
+        else:
+            setattr(node, 'layer_type', 'unknown')
 
     return graph
 

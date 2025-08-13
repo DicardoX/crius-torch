@@ -17,9 +17,9 @@ from torch import nn
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
-from crius.offline.offline_profiler import CriusOfflineDataManager
+from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
 from crius.global_envs import logger
-
+from crius.offline.online_profiler import online_single_op
 
 class CriusDistProfiler:
     """ Crius Torch-like disaggregated profiler. 
@@ -89,19 +89,25 @@ class CriusDistProfiler:
         """ Query operator latencies(ms) from offline profiled data. """
 
         for node in graph.nodes:
-            if node.op == "call_module":
+            if node.op in ("call_module", "call_function", "call_method"):
                 node_latency = 0.0
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
                     input_shapes, output_shapes = node.input_shapes, node.output_shapes
+
+                    if node.layer_type == 'unknown':
+                        setattr(node, "latency", None)
+                        continue
+
                     query_key = CriusOfflineDataManager.get_query_key(
-                        op_type=node.layer_type, batch_size=input_shapes[0][0], seq_len=input_shapes[0][1],
-                        left_op_hidden_dim=input_shapes[0][2], right_op_hidden_dim=output_shapes[0][2],
+                        op_type=node.layer_type, input_shapes=input_shapes, output_shapes=output_shapes
                     )
+
                     if query_key in self._profiled_data:
                         node_latency = self._profiled_data[query_key]["latency_ms"]
                     else:
-                        logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
+                        node_latency = online_single_op(node)
+                        logger.warning(f"Query key {query_key} not found, online profile {node_latency}ms.")
                 
                 setattr(node, "latency", node_latency)
             else:
