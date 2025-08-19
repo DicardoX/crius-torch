@@ -52,12 +52,12 @@ ENV NVTE_FRAMEWORK=pytorch
 
 # Install flash-attn (this is resource-intensive and time-consuming)
 RUN . /opt/conda/etc/profile.d/conda.sh && \
-    conda activate finetune && \
+    conda activate crius && \
     MAX_JOBS=16 pip install flash-attn==2.6.3 --no-build-isolation
 
 # Install megatron-lm 
 RUN . /opt/conda/etc/profile.d/conda.sh && \
-    conda activate finetune && \
+    conda activate crius && \
     # apt update && \
     # apt install gcc-11 g++-11 -y && \
     pip install --upgrade setuptools && \
@@ -76,7 +76,7 @@ RUN . /opt/conda/etc/profile.d/conda.sh && \
 # Install nvidia apex
 # NOTE: This requires the version of torch cuda and the CUDA version are the same.
 RUN . /opt/conda/etc/profile.d/conda.sh && \
-    conda activate finetune && \
+    conda activate crius && \
     pip install --upgrade setuptools && \
     # pip install git+https://github.com/NVIDIA/TransformerEngine.git@stable && \
     git clone https://github.com/NVIDIA/apex && \
