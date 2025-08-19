@@ -20,10 +20,10 @@ from crius.model_parallel.utils import ParallelismPlan
 
 
 class ToyLayer(nn.Module):
-    def __init__(self, hidden_size: int, device: str,):
+    def __init__(self, hidden_size: int, device: str, dtype: str = torch.float16) -> None:
         super().__init__()
-        self.fc1 = nn.Linear(hidden_size, hidden_size, device=device)
-        self.fc2 = nn.Linear(hidden_size, hidden_size, device=device)
+        self.fc1 = nn.Linear(hidden_size, hidden_size, device=device, dtype=dtype)
+        self.fc2 = nn.Linear(hidden_size, hidden_size, device=device, dtype=dtype)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.fc1(x)
@@ -34,15 +34,15 @@ class ToyModel(nn.Module):
     """ Toy PyTorch model. """
 
     def __init__(
-            self, hidden_size: int, num_layers: int, device: str,
+            self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16,
     ) -> None:
         """ Initialize a toy model. """
 
         super().__init__()
         self.device = device
         self.num_layers = num_layers
-        self.layers = nn.ModuleList([ToyLayer(hidden_size, device) for _ in range(num_layers)])
-        self.layer_norm = nn.LayerNorm(hidden_size, device=device)
+        self.layers = nn.ModuleList([ToyLayer(hidden_size, device, dtype) for _ in range(num_layers)])
+        self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
         
     def _gemm_op(self, hidden_states: torch.Tensor, layer_index: int) -> torch.Tensor:
         """ Atomic GEMM operator. """
@@ -57,9 +57,9 @@ class ToyModel(nn.Module):
         return self.layer_norm(hidden_states)
 
 
-def model_provider(hidden_size: int, num_layers: int, device: str) -> nn.Module:
+def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str) -> nn.Module:
     """ Model provider function. """
-    return ToyModel(hidden_size, num_layers, device)
+    return ToyModel(hidden_size, num_layers, device, dtype=dtype)
 
 
 class TorchModelProfileTest(unittest.TestCase):
@@ -78,12 +78,12 @@ class TorchModelProfileTest(unittest.TestCase):
             max_batch_size=4,
             batch_size_step="power-of-2",
             min_seq_len=32,
-            max_seq_len=1024,
+            max_seq_len=2048,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims=[128, ],
-            gemm_right_op_hidden_dims=[128, ],
+            gemm_left_op_hidden_dims=[4096, ],
+            gemm_right_op_hidden_dims=[4096, ],
             dtype=torch.float16,
-            device="cuda:1",
+            device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
             force_overwrite=True,
@@ -101,12 +101,13 @@ class TorchModelProfileTest(unittest.TestCase):
         """ Profile a naive torch model. """
         
         global_bs = 8
-        seq_len = 128
+        seq_len = 2048
         num_micro_batches = 2
-        hidden_size = 128
+        hidden_size = 4096
         num_layers = 4
         dtype = torch.float16
-        device = "cuda:0"
+        device = "cuda"
+        enable_torch_profiler = False
 
         # Model
         # _model_loader_class = ModelLoader
@@ -117,6 +118,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "hidden_size": hidden_size,
                 "num_layers": num_layers,
                 "device": device,
+                "dtype": dtype,
             },
             # device_str=device,
             fake_device_str=device,
@@ -173,6 +175,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "hidden_size": hidden_size,
                 "num_layers": num_layers,
                 "device": device,
+                "dtype": dtype,
             },
             device_str=device,
         )
@@ -180,25 +183,43 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Warmup
         for _ in range(100):
-            _ = model(data[0])
+            with torch.no_grad():
+                _ = model(data[0])
         torch.cuda.synchronize(device)
 
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)  
+        if not enable_torch_profiler:     
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)  
+            # Measure
+            start_event.record()
+            for _ in range(1000):
+                with torch.no_grad():
+                    _ = model(data[0])
+            end_event.record()    
 
-        # Measure
-        start_event.record()
-        for _ in range(1000):
-            _ = model(data[0])
-        end_event.record()    
-
-        torch.cuda.synchronize(device)
-        total_time_ms = start_event.elapsed_time(end_event)
-        avg_latency_ms = total_time_ms / 1000     
-        stage_latencies_ms = [avg_latency_ms]
-        measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+            end_event.synchronize()
+            total_time_ms = start_event.elapsed_time(end_event)
+            avg_latency_ms = total_time_ms / 1000     
+            stage_latencies_ms = [avg_latency_ms]
+            measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+            
+            print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
         
-        print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
+        else:
+            with torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA, ],
+                # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                # on_trace_ready=lambda x: x.export_chrome_trace('/app/torch_exec_trace.json'),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+            ) as prof:
+                for _ in range(1):
+                    with torch.no_grad():
+                        _ = model(data[0])
+                prof.step()
+        
+            prof.export_chrome_trace('/app/torch_exec_trace.json')
 
 
 if __name__ == '__main__':

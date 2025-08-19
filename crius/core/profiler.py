@@ -79,6 +79,8 @@ class CriusDistProfiler:
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
 
+        print(stage_latencies)
+
         # Step 4. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
             stage_latencies, parallelism_plan, only_forward,
