@@ -231,6 +231,8 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.utils import initialize_distributed
 
         class MegatronToyLayer(MegatronModule):
+            # TODO(chunyu): Replace nn.Linear with Megatron's tensor parallelized linear layer.
+            
             def __init__(self, hidden_size: int, device: str, dtype: str = torch.float16) -> None:
                 super().__init__(config=None)
                 self.fc1 = nn.Linear(hidden_size, hidden_size, device=device, dtype=dtype)
