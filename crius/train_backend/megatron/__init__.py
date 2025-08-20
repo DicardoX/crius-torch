@@ -1,0 +1,1 @@
+from crius.train_backend.megatron.utils import initialize_distributed
