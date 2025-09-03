@@ -12,7 +12,9 @@ import re
 import torch
 from torch import nn
 import torch._dynamo as dynamo
+import torch.fx as fx
 from torch.fx.passes.shape_prop import TensorMetadata
+from torch._subclasses.fake_tensor import FakeTensorMode
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
@@ -51,6 +53,8 @@ call_module_core_op_category2 = {
     'wte': 'torch.nn.Embedding',
     'wpe': 'torch.nn.Embedding',
     'drop': 'torch.nn.Dropout',
+    'attn_resid_dropout': 'torch.nn.Dropout',
+    'mlp_dropout': 'torch.nn.Dropout',
 }
 
 call_function_core_op_category = {
@@ -65,6 +69,9 @@ call_function_core_op_category = {
     'tril': 'torch.tril',
     'cat': 'torch.cat',                            # 沿指定维度拼接张量
     'neg': 'torch.neg',                            # 逐元素取负
+    'addmm': 'torch.addmm',
+    'pow': 'torch.pow',
+    'tanh': 'torch.tanh',
 
     '_enter_autocast': 'torch.cuda.amp.autocast',  # 进入自动混合精度上下文
     '_exit_autocast': 'torch.cuda.amp.autocast',   # 退出混合精度上下文
@@ -220,17 +227,60 @@ def print_operator_summary(operator_counts: Dict[str, int]) -> None:
         print(f"  {op_type}: {count}")
 
 
+def replace_where_with_static(graph_module: torch.fx.GraphModule, *input_args, top_k: int):
+    """
+    Replace all `torch.where(condition)` calls with a fake static version
+    that returns two tensors of shape (top_k,).
+    """
+    graph = graph_module.graph
+
+    for node in graph.nodes:
+        if node.op == 'call_function' and node.target == torch.where:
+            # Check if it's the two-arg form: torch.where(condition)
+            if len(node.args) == 1 and len(node.kwargs) == 0:
+                condition = node.args[0]
+                with graph.inserting_after(node):
+                    # Create a fake index tensor of shape (top_k,)
+                    # Use torch.arange to generate a static-sized tensor
+                    fake_idx = graph.create_node(
+                        'call_function',
+                        torch.arange,
+                        args=(top_k,),
+                        kwargs={'dtype': torch.int64, 'device': "cuda"}  
+                    )
+                    # Duplicate for both outputs: (indices, top_x)
+                    # You can also use graph.create_node('copy', fake_idx) if needed
+                    user_nodes = list(node.users.keys())
+                    node.replace_all_uses_with((fake_idx, fake_idx))
+                    graph.erase_node(node)
+    graph_module.recompile()
+    return graph_module
+
 
 def transform_to_ir_graph(
     model: nn.Module,
     *input_args,
+    top_k: int = 4,
 ) -> Any:
     """ Transform model into IR graph. """
     # Trace with Python-level JIT compiler
     fx_module = dynamo.export(model)(*input_args)[0]
+
+    # For moe module. replace torch.where 
+    top_k = 8
+    fx_module = replace_where_with_static(fx_module, input_args, top_k=top_k)
+
     fx_graph = fx_module.graph
     # Construct IR graph
     graph = IRGraph(fx_graph.owning_module)
+
+    # ShapeProp必须放在graph_copy前面
+    from torch.fx.passes.shape_prop import ShapeProp
+    try:
+        ShapeProp(graph.owning_module).propagate(*input_args)
+    except Exception as e:
+        raise RuntimeError(f"ShapeProp failed even with patch: {e}") from e
+
     output_vals = graph.graph_copy(fx_graph, val_map={}, return_output_node=True)
     output_val, old_output_node = output_vals
     graph.output(output_val, type_expr=getattr(old_output_node, "type", None))   # Insert output node
@@ -244,9 +294,9 @@ def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
         graph: IR graph to propagate shapes.
         input_args: Input arguments of the model `.forward()` for shape propagation.
     """
-    from torch.fx.passes.shape_prop import ShapeProp
+    # from torch.fx.passes.shape_prop import ShapeProp
     
-    ShapeProp(graph.owning_module).propagate(*input_args)
+    # ShapeProp(graph.owning_module).propagate(*input_args)
     graph = graph.owning_module.graph
     for node in graph.nodes:
         # Input shapes
@@ -291,23 +341,33 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
         # GEMM
         if node.op == 'call_module':
             if 'fc' in target:
-                setattr(node, 'layer_type', 'gemm')
+                setattr(node, 'layer_type', 'linear')
             elif 'proj' in target:
-                setattr(node, 'layer_type', 'gemm')
+                if 'experts' in target:   #for expert module， eg: L__self___model_layers_0_mlp_experts_0_gate_proj
+                    setattr(node, 'layer_type', 'expert_linear')
+                else:
+                    setattr(node, 'layer_type', 'linear')
             elif 'qkv' in target:
-                setattr(node, 'layer_type', 'gemm')
+                setattr(node, 'layer_type', 'linear')
             elif 'lm' in target:
-                setattr(node, 'layer_type', 'gemm')
+                setattr(node, 'layer_type', 'linear')
             elif 'ln' in target:
                 setattr(node, 'layer_type', 'layernorm')
             elif 'act' in target:
-                setattr(node, 'layer_type', 'gelu')
+                if 'experts' in target:   #for expert module， eg: L__self___model_layers_0_mlp_experts_0_act_fn
+                    setattr(node, 'layer_type', 'expert_gelu')
+                else:
+                    setattr(node, 'layer_type', 'gelu')
             elif 'drop'  in target:
                 setattr(node, 'layer_type', 'dropout')
-            # elif 'wte' in target:
-            #     setattr(node, 'layer_type', 'embedding')
-            # elif 'wpe' in target:
-            #     setattr(node, 'layer_type', 'embedding')
+            elif 'wte' in target:
+                setattr(node, 'layer_type', 'embedding')
+            elif 'wpe' in target:
+                setattr(node, 'layer_type', 'embedding')
+            elif 'embed' in target:
+                setattr(node, 'layer_type', 'embedding')
+            elif 'gate' in target:
+                setattr(node, 'layer_type', 'softmax')
             else:
                 print(f"unknown call module: {target}")
                 setattr(node, 'layer_type', 'unknown')
@@ -326,8 +386,14 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
                 setattr(node, 'layer_type', 'pow')
             # elif 'eq' in target:
             #     setattr(node, 'layer_type', 'eq')
-            # elif 'tril' in target:
-            #     setattr(node, 'layer_type', 'tril')
+            elif 'topk' in target:
+                setattr(node, 'layer_type', 'topk')
+            elif 'tril' in target:
+                setattr(node, 'layer_type', 'tril')
+            elif 'softmax' in target:
+                setattr(node, 'layer_type', 'softmax')
+            elif 'rsqrt' in target:
+                setattr(node, 'layer_type', 'rsqrt')
             else:
                 print(f"unknown call function: {target}")
                 setattr(node, 'layer_type', 'unknown')
@@ -339,6 +405,10 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
                 setattr(node, 'layer_type', 'masked_fill')
             elif 'contiguous' in target:
                 setattr(node, 'layer_type', 'contiguous')
+            elif 'to' in target:
+                setattr(node, 'layer_type', 'to')
+            elif 'pow' in target:
+                setattr(node, 'layer_type', 'pow')
             else:
                 print(f"unknown call method: {target}")
                 setattr(node, 'layer_type', 'unknown')

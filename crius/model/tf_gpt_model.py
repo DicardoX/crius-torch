@@ -25,6 +25,8 @@ class GPTConfig:
         bos_token_id=50256,
         eos_token_id=50256,
         pad_token_id=0,
+        device='cuda',
+        dtype=torch.float16,
         **kwargs
     ):
         self.vocab_size = vocab_size
@@ -48,20 +50,22 @@ class GPTConfig:
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
         self.pad_token_id = pad_token_id
+        self.device = device
+        self.dtype = dtype
 
 class GPTModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
 
-        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
-        self.wpe = nn.Embedding(config.n_positions, config.n_embd)
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd, device=config.device, dtype=config.dtype)
+        self.wpe = nn.Embedding(config.n_positions, config.n_embd, device=config.device, dtype=config.dtype)
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([
             GPTBlock(config) for _ in range(config.n_layer)
         ])
-        self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.ln_f = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon, device=config.device, dtype=config.dtype)
 
     def forward(self, input_ids, position_ids=None, attention_mask=None):
         input_shape = input_ids.size()
@@ -87,9 +91,9 @@ class GPTModel(nn.Module):
 class GPTBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.ln_1 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon, device=config.device, dtype=config.dtype)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.ln_2 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon, device=config.device, dtype=config.dtype)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -106,9 +110,9 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = self.n_embd // self.n_head
         self.scale = self.head_dim ** -0.5 if config.scale_attn_weights else 1.0
 
-        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd)
+        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd, device=config.device, dtype=config.dtype)
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
-        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.proj = nn.Linear(config.n_embd, config.n_embd, device=config.device, dtype=config.dtype)
 
     def forward(self, x):
         B, T, C = x.size()
@@ -134,8 +138,8 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, config.n_inner)
-        self.c_proj = nn.Linear(config.n_inner, config.n_embd)
+        self.c_fc = nn.Linear(config.n_embd, config.n_inner, device=config.device, dtype=config.dtype)
+        self.c_proj = nn.Linear(config.n_inner, config.n_embd, device=config.device, dtype=config.dtype)
         self.act = nn.GELU()
 
     def forward(self, x):

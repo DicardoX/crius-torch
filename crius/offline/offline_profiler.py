@@ -203,7 +203,31 @@ class CriusOfflineDataManager:
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
         
-    # wte 和wpe 两个算子是embedding 算子，目前测试两个算子的前向计算总和耗时2ms， 暂时忽略
+    def benchmark_tril(self, seq_len: int,
+                       device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
+                       num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
+
+        input_tensor = torch.randn(seq_len, seq_len, dtype=dtype, device=device)
+
+        for _ in range(num_warmup_steps):
+            _ = input_tensor.tril()
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            _ = input_tensor.tril()
+
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        print(f"tril latency: {op_latency_}, seq_len: {seq_len}, dtype: {dtype}")
+        return op_latency_
     def benchmark_embedding(self, vocab_size: int, embedding_dim: int,
                             device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
@@ -255,10 +279,38 @@ class CriusOfflineDataManager:
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
-        
-    def benchmark_layernorm(self, bs: int, embedding_dim: int, seq_len: int, 
+
+    def benchmark_expert_gelu(self, top_k: int, embedding_dim: int, 
                             device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
+        input_op = torch.randn(top_k, embedding_dim, device=device, dtype=dtype)
+
+        for _ in range(num_warmup_steps):
+            with torch.no_grad():
+                torch.nn.functional.gelu(input_op)
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            with torch.no_grad():
+                _ = torch.nn.functional.gelu(input_op)
+
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
+
+
+    def benchmark_layernorm(self, bs: int, embedding_dim: int, seq_len: int, 
+                            device: str = "cuda", dtype: torch.dtype = torch.float16, 
+                            num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
+        print(f"benchmarking layernorm, bs: {bs}, embedding_dim: {embedding_dim}, seq: {seq_len}")
         input_op = torch.randn(bs, seq_len, embedding_dim, device=device, dtype=dtype)
 
         layernorm = torch.nn.LayerNorm(normalized_shape = embedding_dim, device=device, dtype=dtype)
@@ -316,12 +368,22 @@ class CriusOfflineDataManager:
     
     def benchmark_pow(self,
                       shape: tuple,
+                      method: str = 'function',
                       device: str = "cuda:0", dtype: torch.dtype = torch.float16,
                       num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
         input_op = torch.randn(shape, device=device, dtype=dtype)
+        scalar = 2.0
+
+        # choose method
+        if method == 'function':
+            op = lambda x: torch.pow(x, scalar)
+        elif method == 'method':
+            op = lambda x: x.pow(scalar)
+        else:
+            raise ValueError(f'Unknown method: {method}')
 
         for _ in range(num_warmup_steps):
-            _ = torch.pow(input_op, 2.0)
+            _ = op(input_op)
         torch.cuda.synchronize()
 
         # Timer events
@@ -331,7 +393,7 @@ class CriusOfflineDataManager:
         # Benchmark
         start_event.record()
         for _ in range(num_profile_steps):
-            _ = torch.pow(input_op, 2.0)
+            _ = op(input_op)
 
         end_event.record()
         torch.cuda.synchronize()
@@ -370,13 +432,43 @@ class CriusOfflineDataManager:
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
+    
+    def benchmark_topk(self,
+                        bs: int, topk: int, expert_nums: int, seq_len: int, 
+                        device: str = "cuda:0", dtype: torch.dtype = torch.float16,
+                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+        total_tokens = bs * seq_len
+        scores = torch.randn(total_tokens, expert_nums, device=device, dtype=dtype)
+
+        for _ in range (num_warmup_steps):
+            _ = torch.topk(scores, k=topk, dim=-1)
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            _ = torch.topk(scores, k=topk, dim=-1)
+
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
         
     def benchmark_softmax(self,
-                          bs: int, num_heads: int, seq_len: int,
+                          bs: int, num_heads: int, seq_len: int, hidden_size: int =0,
                           device: str = "cuda:0", dtype: torch.dtype = torch.float16,
                           num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
         
-        left_op = torch.randn(bs, num_heads, seq_len, seq_len, device=device, dtype=dtype)
+        if hidden_size == 0:
+            left_op = torch.randn(bs, num_heads, seq_len, seq_len, device=device, dtype=dtype)
+            print(dtype)
+        else:
+            left_op = torch.randn(seq_len, hidden_size, device=device, dtype=dtype)
         
         for _ in range(num_warmup_steps):
             torch.softmax(left_op, dim=-1)
@@ -424,21 +516,126 @@ class CriusOfflineDataManager:
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
+    
+    def benchmark_to_dtype(self,
+                        input_shapes, output_shapes,
+                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
+                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+        
+        x = torch.randn(*input_shapes, device=device, dtype=torch.float32)
+        for _ in range(num_warmup_steps):
+            _ = x.to(dtype)
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            _ = x.to(dtype)
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
+    
+    def benchmark_rsqrt(self, shape, 
+                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
+                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+        x = torch.rand(*shape, device=device, dtype=dtype) + 1e-8
+
+        for _ in range(num_warmup_steps):
+            _ = torch.rsqrt(x)
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            _ = torch.rsqrt(x)
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
+
+    def benchmark_expert_linear(self, top_k: int, 
+                        input_size: int, output_size: int, 
+                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
+                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+        
+        weight = torch.randn(output_size, input_size, device=device, dtype=dtype)
+        bias = torch.randn(output_size, device=device, dtype=dtype)
+        x = torch.randn(top_k, input_size, device=device, dtype=dtype)
+
+        for _ in range(num_warmup_steps):
+            with torch.no_grad():
+                _ = torch.nn.functional.linear(x, weight, bias)
+            torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        start_event.record()
+        for _ in range(num_profile_steps):
+            with torch.no_grad():
+                _ = torch.nn.functional.linear(x, weight, bias)
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
+
+    def benchmark_linear(self, bs: int, seq_len: int, 
+                        input_size: int, output_size: int, 
+                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
+                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+        
+        weight = torch.randn(output_size, input_size, device=device, dtype=dtype)
+        bias = torch.randn(output_size, device=device, dtype=dtype)
+        x = torch.randn(bs, seq_len, input_size, device=device, dtype=dtype)
+
+        for _ in range(num_warmup_steps):
+            with torch.no_grad():
+                _ = torch.nn.functional.linear(x, weight, bias)
+            torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        start_event.record()
+        for _ in range(num_profile_steps):
+            with torch.no_grad():
+                _ = torch.nn.functional.linear(x, weight, bias)
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
 
     def bencmark_one_op(self, 
                         gemm_op_type: Callable, bs: int, seq_len: int, 
                         left_hidden_dim: int, right_hidden_dim: int,
                         device: str = "cuda:0",  dtype: torch.dtype = torch.float16, 
                         num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
-        left_op = torch.randn((bs, seq_len, left_hidden_dim), dtype=dtype, device=device)
-        right_op = torch.randn((left_hidden_dim, right_hidden_dim), dtype=dtype, device=device)
-        result_op = torch.zeros((bs, seq_len, right_hidden_dim), dtype=dtype, device=device)
+        
+        if seq_len == 0:
+            left_op = torch.randn((bs, left_hidden_dim), dtype=dtype, device=device)
+            right_op = torch.randn((left_hidden_dim, right_hidden_dim), dtype=dtype, device=device)
+        else:
+            left_op = torch.randn((bs, seq_len, left_hidden_dim), dtype=dtype, device=device)
+            right_op = torch.randn((left_hidden_dim, right_hidden_dim), dtype=dtype, device=device)
 
         # Warmup
         for _ in range(num_warmup_steps):
-            if gemm_op_type is torch.tril:
-                gemm_op_type(left_op)
-            elif gemm_op_type is torch.mul:    
+            if gemm_op_type is torch.mul:    
                 gemm_op_type(left_op, left_op)
             elif gemm_op_type is torch.eq:
                 gemm_op_type(left_op, left_op)
@@ -638,10 +835,17 @@ class CriusOfflineDataManager:
         """ Generate a unique query key for the operation. """
         batch_size = input_shapes[0][0]
         if op_type == 'softmax':
-            num_heads = input_shapes[0][1]
-            seq_len = input_shapes[0][2]
+            if len(input_shapes[0]) >= 3:
+                num_heads = input_shapes[0][1]
+                seq_len = input_shapes[0][2]
+                hidden_size = 0
+            elif len(input_shapes[0]) >= 2:
+                seq_len = input_shapes[0][0]
+                hidden_size = input_shapes[0][1]
+                batch_size = 0
+                num_heads = 0
             query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads = num_heads, vocab_size=0,
-                                                embedding_dim=0, input_dim=0, output_dim=0)
+                                                embedding_dim=hidden_size, input_dim=0, output_dim=0)
             
         elif op_type == 'layernorm':
             seq_len = input_shapes[0][1]
@@ -653,7 +857,13 @@ class CriusOfflineDataManager:
             embedding_dim = input_shapes[0][2]
             query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads=0, vocab_size=0,
                                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
-            
+
+        elif op_type == 'expert_gelu':  
+            top_k = input_shapes[0][0]
+            embedding_dim = input_shapes[0][1]
+            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = top_k, seq_len = 0, num_heads=0, vocab_size=0,
+                                                                embedding_dim=embedding_dim, input_dim=0, output_dim=0)
+
         elif op_type == 'dropout':
             num_heads = input_shapes[0][1]
             seq_len = input_shapes[0][2]
@@ -705,11 +915,48 @@ class CriusOfflineDataManager:
             output_dim = input_shapes[1][0]
             query_key = cls.get_comm_query_key(op_type=op_type, batch_size=B, seq_len=0, num_heads=0, vocab_size=0,
                                                 embedding_dim=0, input_dim=input_dim, output_dim=output_dim)
+
+        elif op_type == 'tril':
+            seq_len=output_shapes[0][0]     
+            query_key = cls.get_gemm_query_key(op_type=op_type, batch_size=0, seq_len = seq_len, 
+                                                left_op_hidden_dim=0, right_op_hidden_dim=0)
             
+        elif op_type == 'topk':
+            seq_len = input_shapes[0][0]
+            expert_nums = input_shapes[0][1]
+            query_key = cls.get_comm_query_key(op_type=op_type, batch_size=1, seq_len=seq_len, num_heads=expert_nums, vocab_size=0,
+                                               embedding_dim=0, input_dim=0, output_dim=0)
+            
+        elif op_type =='expert_linear':
+            top_k = input_shapes[0][0]
+            left_hidden_dim = input_shapes[0][1]
+            right_hidden_dim = output_shapes[0][1]
+            query_key = cls.get_gemm_query_key(op_type=op_type, batch_size=top_k, seq_len=0, 
+                                               left_op_hidden_dim=left_hidden_dim, right_op_hidden_dim=right_hidden_dim)
+
+        # TODO
+        elif op_type == 'to':
+            query_key = 'to_0_0'
         else:
-            seq_len=input_shapes[0][1]
-            left_hidden_dim=input_shapes[0][2]
-            right_hidden_dim=output_shapes[0][2]
+            if len(input_shapes[0]) >= 3:
+                batch_size = input_shapes[0][0]               
+                seq_len=input_shapes[0][1]
+                left_hidden_dim=input_shapes[0][2]
+                right_hidden_dim=output_shapes[0][2]
+            elif len(input_shapes[1]) >= 3:
+                batch_size = input_shapes[1][0]               
+                seq_len=input_shapes[1][1]
+                left_hidden_dim=input_shapes[1][2]
+                right_hidden_dim=output_shapes[0][2]
+            else: 
+                # in expert layer, mul always like: 
+                # input_shapes = [torch.Size([4, 768]), torch.Size([4, 768])], output_shapes = [torch.Size([4, 768])]
+                # the 1st is top_k, the 2nd num is hidden dim
+                top_k = input_shapes[0][0]
+                left_hidden_dim = input_shapes[0][1]
+                right_hidden_dim = input_shapes[1][1]
+                batch_size = top_k
+                seq_len = 0
 
             query_key = cls.get_gemm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, 
                                                 left_op_hidden_dim=left_hidden_dim, right_op_hidden_dim=right_hidden_dim)

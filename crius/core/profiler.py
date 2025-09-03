@@ -79,6 +79,8 @@ class CriusDistProfiler:
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
 
+        print(stage_latencies)
+
         # Step 4. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
             stage_latencies, parallelism_plan, only_forward,
@@ -96,7 +98,13 @@ class CriusDistProfiler:
                     input_shapes, output_shapes = node.input_shapes, node.output_shapes
 
                     if node.layer_type == 'unknown':
-                        setattr(node, "latency", None)
+                        node_latency = 0.002 #所有没有分类的小算子都模式0.002ms
+                        setattr(node, "latency", node_latency)
+                        continue
+
+                        
+                    if len(input_shapes) == 0 and len(output_shapes) == 0:
+                        setattr(node, "latency", 0.0)
                         continue
 
                     query_key = CriusOfflineDataManager.get_query_key(
@@ -120,7 +128,7 @@ class CriusDistProfiler:
 
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for node in graph.nodes:
-            layer_index = parallelism_plan.op_to_layer_mapping.get(node.target, None)
+            layer_index = parallelism_plan.op_to_layer_mapping.get(str(node.target), None)
             if layer_index is None:
                 continue
             stage_index = next(

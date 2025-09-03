@@ -21,6 +21,8 @@ def get_optype_func(op_type: str) -> Callable:
         return torch.tril
     elif op_type == 'gemm':
         return torch.matmul
+    elif op_type == 'linear':
+        return torch.nn.Linear
     else:
         return None
 
@@ -41,12 +43,21 @@ def online_single_op(node: IRNode) -> float:
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
+    ifWrite = True
 
     if op_type == 'softmax':
-        num_heads = input_shapes[0][1]
-        seq_len = input_shapes[0][2]
+        if len(input_shapes[0]) >= 3:
+            num_heads = input_shapes[0][1]
+            seq_len = input_shapes[0][2]
+            hidden_size = 0
+        elif len(input_shapes[0]) >= 2:
+            seq_len = input_shapes[0][0]
+            hidden_size = input_shapes[0][1]
+            batch_size = 0
+            num_heads = 0
+        
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
-        op_latency = offline_profiler.benchmark_softmax(batch_size, num_heads, seq_len)
+        op_latency = offline_profiler.benchmark_softmax(batch_size, num_heads, seq_len, hidden_size)
     elif op_type == 'layernorm':
         seq_len = input_shapes[0][1]
         embedding_dim = input_shapes[0][2]
@@ -57,12 +68,22 @@ def online_single_op(node: IRNode) -> float:
         embedding_dim = input_shapes[0][2]
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
         op_latency = offline_profiler.benchmark_gelu(batch_size, seq_len, embedding_dim)
+    elif op_type == 'expert_gelu':
+        top_k = input_shapes[0][0]
+        embedding_dim = input_shapes[0][1]
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_expert_gelu(top_k, embedding_dim)
     elif op_type == 'dropout':
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
         op_latency = offline_profiler.benchmark_dropout(input_shapes[0])
-    elif op_type == 'pow':
+    elif op_type == 'pow' and node.op == 'call_function':
+        op_type = 'function_pow'
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
-        op_latency = offline_profiler.benchmark_pow(input_shapes[0])
+        op_latency = offline_profiler.benchmark_pow(input_shapes[0], 'function')
+    elif op_type == 'pow' and node.op == 'call_method':
+        op_type = 'method_pow'
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_pow(input_shapes[0], 'method', dtype=torch.float32)
     elif op_type == 'embedding':
         vocab_size = input_shapes[0][0]
         embedding_dim = input_shapes[0][1]
@@ -99,17 +120,63 @@ def online_single_op(node: IRNode) -> float:
         output_dim = input_shapes[1][0]
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
         op_latency = offline_profiler.benchmark_addmm(B, input_dim, output_dim)
-    else:
+    elif op_type == 'tril':
+        seq_len = output_shapes[0][1]
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_tril(seq_len)
+    elif op_type == 'topk':
+        seq_len = input_shapes[0][0]
+        expert_nums = input_shapes[0][1]
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_topk(bs=1, topk=8, expert_nums=expert_nums, seq_len=seq_len)
+    elif op_type == 'rsqrt':
+        ifWrite = False
+        op_latency = offline_profiler.benchmark_rsqrt(input_shapes)
+    elif op_type == 'to':
+        ifWrite = False
+        op_latency = offline_profiler.benchmark_to_dtype(input_shapes, output_shapes)
+    elif op_type == 'linear':
         seq_len=input_shapes[0][1]
         left_hidden_dim=input_shapes[0][2]
         right_hidden_dim=output_shapes[0][2]
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_linear(batch_size, seq_len, left_hidden_dim, right_hidden_dim)
+    elif op_type == 'expert_linear':
+        top_k = input_shapes[0][0]
+        left_hidden_dim = input_shapes[0][1]
+        right_hidden_dim = output_shapes[0][1]
+        query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
+        op_latency = offline_profiler.benchmark_expert_linear(top_k, left_hidden_dim, right_hidden_dim)
+    else:
+
+        if len(input_shapes[0]) >= 3:
+            batch_size = input_shapes[0][0]               
+            seq_len=input_shapes[0][1]
+            left_hidden_dim=input_shapes[0][2]
+            right_hidden_dim=output_shapes[0][2]
+        elif len(input_shapes[1]) >= 3:
+            batch_size = input_shapes[1][0]               
+            seq_len=input_shapes[1][1]
+            left_hidden_dim=input_shapes[1][2]
+            right_hidden_dim=output_shapes[0][2]
+        else: 
+            # in expert layer, mul always like: 
+            # input_shapes = [torch.Size([4, 768]), torch.Size([4, 768])], output_shapes = [torch.Size([4, 768])]
+            # the 1st is top_k, the 2nd num is hidden dim
+            top_k = input_shapes[0][0]
+            left_hidden_dim = input_shapes[0][1]
+            right_hidden_dim = input_shapes[1][1]
+            batch_size = top_k
+            seq_len = 0
+            
         gemm_op_type=get_optype_func(op_type)
 
         query_key = CriusOfflineDataManager.get_query_key(op_type, input_shapes=input_shapes, output_shapes=output_shapes)
         op_latency = offline_profiler.bencmark_one_op(gemm_op_type, batch_size, seq_len, left_hidden_dim, right_hidden_dim)
 
-    offline_profiler._write_one_entry(query_key, op_latency, None)
-    offline_profiler._store()
+    if ifWrite == True:
+        offline_profiler._write_one_entry(query_key, op_latency, None)
+        offline_profiler._store()
     return op_latency
     
 
