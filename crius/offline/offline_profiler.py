@@ -750,7 +750,7 @@ class CriusOfflineDataManager:
             for seq_len in seq_lens:
                 for left_hidden_dim in gemm_left_op_hidden_dims:
                     for right_hidden_dim in gemm_right_op_hidden_dims:
-                        query_key = CriusOfflineDataManager.get_gemm_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
+                        query_key = CriusOfflineDataManager.get_gemm_query_key("gemm", dtype, bs, seq_len, left_hidden_dim, right_hidden_dim)
                         if query_key in self.data and not self.configs.force_overwrite:
                             logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
                                         f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
@@ -818,20 +818,23 @@ class CriusOfflineDataManager:
 
     @classmethod
     def get_gemm_query_key(
-        self, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+        self, op_type: str, dtype: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
     ) -> str:
+        #dtype  eg: torch.float32 only retrun float32
+        dtype = str(dtype).split('.')[-1]
+
         """ Generate a unique query key for the GEMM operation. """
-        return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+        return f"{op_type}_{dtype}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
     
     @classmethod
-    def get_comm_query_key(self, op_type: str, batch_size: int, seq_len: int, 
+    def get_comm_query_key(self, op_type: str, dtype: str, batch_size: int, seq_len: int, 
                            num_heads: int = 0, vocab_size: int = 0, embedding_dim: int = 0,
                            input_dim: int = 0, output_dim: int = 0) -> str:
         """ Generate a unique query key for the GEMM operation. """
-        return f"{op_type}_b{batch_size}_s{seq_len}_h{num_heads}_v{vocab_size}_e{embedding_dim}_i{input_dim}_o{output_dim}"
+        return f"{op_type}_{dtype}_b{batch_size}_s{seq_len}_h{num_heads}_v{vocab_size}_e{embedding_dim}_i{input_dim}_o{output_dim}"
     
     @classmethod
-    def get_query_key(cls, op_type: str, input_shapes: tuple, output_shapes: tuple) -> str:
+    def get_query_key(cls, op_type: str, dtype: str, input_shapes: tuple, output_shapes: tuple) -> str:
         """ Generate a unique query key for the operation. """
         batch_size = input_shapes[0][0]
         if op_type == 'softmax':
@@ -844,55 +847,55 @@ class CriusOfflineDataManager:
                 hidden_size = input_shapes[0][1]
                 batch_size = 0
                 num_heads = 0
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads = num_heads, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads = num_heads, vocab_size=0,
                                                 embedding_dim=hidden_size, input_dim=0, output_dim=0)
             
         elif op_type == 'layernorm':
             seq_len = input_shapes[0][1]
             embedding_dim = input_shapes[0][2]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size=batch_size, seq_len=seq_len, num_heads=0, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=batch_size, seq_len=seq_len, num_heads=0, vocab_size=0,
                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
         elif op_type == 'gelu':
             seq_len = input_shapes[0][1]
             embedding_dim = input_shapes[0][2]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads=0, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads=0, vocab_size=0,
                                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
 
         elif op_type == 'expert_gelu':  
             top_k = input_shapes[0][0]
             embedding_dim = input_shapes[0][1]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = top_k, seq_len = 0, num_heads=0, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = top_k, seq_len = 0, num_heads=0, vocab_size=0,
                                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
 
         elif op_type == 'dropout':
             num_heads = input_shapes[0][1]
             seq_len = input_shapes[0][2]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size=batch_size, seq_len=seq_len,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=batch_size, seq_len=seq_len,
                                                 num_heads=num_heads, vocab_size=0, embedding_dim=0, input_dim=0, output_dim=0)
 
         elif op_type == 'pow':
             seq_len = input_shapes[0][1]
             embedding_dim = input_shapes[0][2]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads=0, vocab_size=0, 
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads=0, vocab_size=0, 
                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
             
         elif op_type == 'embedding':
             vocab_size = input_shapes[0][0]
             embedding_dim = input_shapes[0][1]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len=0, num_heads=0, vocab_size=vocab_size,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len=0, num_heads=0, vocab_size=vocab_size,
                                                 embedding_dim=embedding_dim, input_dim=0, output_dim=0)
             
         elif op_type == 'sdpa':
             num_heads = input_shapes[0][1]
             seq_len = input_shapes[0][2]
             dim_per_head = input_shapes[0][3]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads=num_heads, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads=num_heads, vocab_size=0,
                                                 embedding_dim=dim_per_head, input_dim=0, output_dim=0)
 
         elif op_type == 'masked_fill':
             num_heads = input_shapes[0][1]
             seq_len = input_shapes[0][2]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads=num_heads, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads=num_heads, vocab_size=0,
                                                 embedding_dim=0, input_dim=0, output_dim=0)
 
         elif op_type == 'contiguous':
@@ -905,7 +908,7 @@ class CriusOfflineDataManager:
                 seq_len = input_shapes[0][2]
                 dim_per_head = input_shapes[0][3]
             
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, num_heads = num_heads_or_hidden_dim, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, num_heads = num_heads_or_hidden_dim, vocab_size=0,
                                                 embedding_dim=dim_per_head, input_dim=0, output_dim=0)
             
         elif op_type == 'addmm':
@@ -913,25 +916,25 @@ class CriusOfflineDataManager:
             B = input_shapes[0][0]
             input_dim = input_shapes[1][1]
             output_dim = input_shapes[1][0]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size=B, seq_len=0, num_heads=0, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=B, seq_len=0, num_heads=0, vocab_size=0,
                                                 embedding_dim=0, input_dim=input_dim, output_dim=output_dim)
 
         elif op_type == 'tril':
             seq_len=output_shapes[0][0]     
-            query_key = cls.get_gemm_query_key(op_type=op_type, batch_size=0, seq_len = seq_len, 
+            query_key = cls.get_gemm_query_key(op_type=op_type, dtype=dtype, batch_size=0, seq_len = seq_len, 
                                                 left_op_hidden_dim=0, right_op_hidden_dim=0)
             
         elif op_type == 'topk':
             seq_len = input_shapes[0][0]
             expert_nums = input_shapes[0][1]
-            query_key = cls.get_comm_query_key(op_type=op_type, batch_size=1, seq_len=seq_len, num_heads=expert_nums, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=1, seq_len=seq_len, num_heads=expert_nums, vocab_size=0,
                                                embedding_dim=0, input_dim=0, output_dim=0)
             
         elif op_type =='expert_linear':
             top_k = input_shapes[0][0]
             left_hidden_dim = input_shapes[0][1]
             right_hidden_dim = output_shapes[0][1]
-            query_key = cls.get_gemm_query_key(op_type=op_type, batch_size=top_k, seq_len=0, 
+            query_key = cls.get_gemm_query_key(op_type=op_type, dtype=dtype, batch_size=top_k, seq_len=0, 
                                                left_op_hidden_dim=left_hidden_dim, right_op_hidden_dim=right_hidden_dim)
 
         # TODO
@@ -958,7 +961,7 @@ class CriusOfflineDataManager:
                 batch_size = top_k
                 seq_len = 0
 
-            query_key = cls.get_gemm_query_key(op_type=op_type, batch_size = batch_size, seq_len = seq_len, 
+            query_key = cls.get_gemm_query_key(op_type=op_type, dtype=dtype, batch_size = batch_size, seq_len = seq_len, 
                                                 left_op_hidden_dim=left_hidden_dim, right_op_hidden_dim=right_hidden_dim)
 
         return query_key

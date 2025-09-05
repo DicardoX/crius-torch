@@ -8,6 +8,7 @@ import os
 from typing import (List, Callable, Any, Optional, Union,Dict)
 from collections import defaultdict
 import re
+import logging
 
 import torch
 from torch import nn
@@ -18,6 +19,7 @@ from torch._subclasses.fake_tensor import FakeTensorMode
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
+from crius.model.model_config import model_config
 
 __all__ = [
     "transform_to_ir_graph",
@@ -260,15 +262,16 @@ def replace_where_with_static(graph_module: torch.fx.GraphModule, *input_args, t
 def transform_to_ir_graph(
     model: nn.Module,
     *input_args,
-    top_k: int = 4,
 ) -> Any:
     """ Transform model into IR graph. """
     # Trace with Python-level JIT compiler
     fx_module = dynamo.export(model)(*input_args)[0]
 
-    # For moe module. replace torch.where 
-    top_k = 8
-    fx_module = replace_where_with_static(fx_module, input_args, top_k=top_k)
+    # For moe module. get top_k config and replace torch.where 
+    if model_config.if_moe == True:
+        top_k = model_config.top_k
+        logging.debug(f"Moe Model, change torch.where output from top_k {top_k} info ...")
+        fx_module = replace_where_with_static(fx_module, input_args, top_k=top_k)
 
     fx_graph = fx_module.graph
     # Construct IR graph
@@ -321,6 +324,19 @@ def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
         else:
             output_shapes = []
         setattr(node, 'output_shapes', output_shapes)
+
+        # dtype
+        if hasattr(node, 'meta') and 'tensor_meta' in node.meta:
+            tensor_meta = node.meta['tensor_meta']
+            if hasattr(tensor_meta, 'dtype'):
+                dtype = tensor_meta.dtype
+            elif isinstance(tensor_meta, torch.Tensor):
+                dtype = tensor_meta.dtype
+            else:
+                dtype = None
+        else:
+            dtype = None
+        setattr(node, 'dtype', dtype)
     
     return graph
 

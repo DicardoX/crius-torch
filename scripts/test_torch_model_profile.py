@@ -26,6 +26,7 @@ from crius.compile.graph.transform import transform_to_ir_graph
 from crius.compile.graph.analysize import get_op_layer_mapping
 from torch.utils.tensorboard import SummaryWriter
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
+from crius.model.model_config import model_config
 
 
 
@@ -365,7 +366,7 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_hf_gpt_model_profiling(self):
         micro_bs = 1
         global_bs = 1
-        dtype = torch.bfloat16  
+        dtype = torch.float32  
         device = torch.device("cuda:0") 
         enable_torch_profiler = False
         profiler_layer_num = 1
@@ -428,7 +429,7 @@ class TorchModelProfileTest(unittest.TestCase):
         _model_loader_class = ShadowModelLoader
         model_loader = _model_loader_class(
             model_provider=hf_model_provider,
-            model_kwargs={"model_path": args.model},
+            model_kwargs={"model_path": args.model, "dtype": args.dtype},
             fake_device_str=args.device
         )
         model = model_loader.load()
@@ -440,28 +441,35 @@ class TorchModelProfileTest(unittest.TestCase):
         # 定义关键词规则
         if re.search(r'gpt(?:[0-9\-_])*[0-9]', model_path) or \
             'gpt2' in model_path or 'gpt-neo' in model_path or 'gpt-j' in model_path or 'gpt-large' in model_path:
-            num_layers = config.num_hidden_layers
-            num_heads = config.num_attention_heads
-            hidden_size = config.n_embd
-            seq_len = config.n_ctx
-            vocab_size = config.vocab_size
+            model_config.num_layers = config.num_hidden_layers
+            model_config.num_heads = config.num_attention_heads
+            model_config.hidden_size = config.n_embd
+            model_config.seq_len = config.n_ctx
+            model_config.vocab_size = config.vocab_size
 
         if 'qwen' in model_path or \
             re.search(r'q?wen[0-9\-_]*[0-9]', model_path) or \
             'llama' in model_path :  # 匹配 qwen, qwen3, wen3 等
-            num_layers = config.num_hidden_layers
-            num_heads = config.num_attention_heads
-            hidden_size = config.hidden_size
-            seq_len = config.max_position_embeddings
-            vocab_size = config.vocab_size
+            model_config.num_layers = config.num_hidden_layers
+            model_config.num_heads = config.num_attention_heads
+            model_config.hidden_size = config.hidden_size
+            model_config.seq_len = config.max_position_embeddings
+            model_config.vocab_size = config.vocab_size
+            if hasattr(config, "num_experts_per_tok"):
+                model_config.if_moe = True
+                model_config.top_k = config.num_experts_per_tok
+            else:
+                model_config.if_moe = False
 
-        print(f"Model config:  num_layers = {num_layers}, num_heads = {num_heads}, seq_len = {seq_len},vocab_size = {vocab_size}")
+        print(f"Model config:  num_layers = {model_config.num_layers}, \
+              num_heads = {model_config.num_heads}, seq_len = {model_config.seq_len}, \
+                vocab_size = {model_config.vocab_size}")
 
-        input_ids = torch.randint(0, vocab_size, (micro_bs, seq_len), dtype=torch.long).to(device)
+        input_ids = torch.randint(0, model_config.vocab_size, (micro_bs, model_config.seq_len), dtype=torch.long).to(device)
         graph = transform_to_ir_graph(model, input_ids)
 
         num_stages = 1
-        base_layers = num_layers // num_stages
+        base_layers = model_config.num_layers // num_stages
         start = 0
         layer_to_stage_mapping = []
         for i in range(num_stages):
