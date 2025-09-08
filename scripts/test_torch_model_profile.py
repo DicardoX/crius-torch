@@ -27,6 +27,7 @@ from crius.compile.graph.analysize import get_op_layer_mapping
 from torch.utils.tensorboard import SummaryWriter
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
 from crius.model.model_config import model_config
+from crius.util import get_filename_include_path
 
 
 
@@ -138,7 +139,7 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         # Profile
         profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
+            profiled_data_path = get_filename_include_path(),
         )
         e2e_latency = profiler.profile(
             model=model,
@@ -289,7 +290,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Profile
         profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
+            profiled_data_path = get_filename_include_path(),
         )
         e2e_latency = profiler.profile(
             model=model,
@@ -364,24 +365,47 @@ class TorchModelProfileTest(unittest.TestCase):
         
     # @unittest.skip("Pass.")
     def test_hf_gpt_model_profiling(self):
-        micro_bs = 1
-        global_bs = 1
-        dtype = torch.float32  
-        device = torch.device("cuda:0") 
-        enable_torch_profiler = False
-        profiler_layer_num = 1
 
         '''
         hugging-face model url: https://huggingface.co/openai-community/gpt2-xl
         '''
 
-        args = argparse.Namespace(
-            model="/build/Qwen3-30B-A3B",  
-            # model="/build/gpt2-xl",  
-            device=device,
-            dtype=dtype,
+        def get_hf_model_config(model: str, trust_remote_code=True):
 
-        )
+            config = transformers.AutoConfig.from_pretrained(args.model, trust_remote_code=True)
+
+            if hasattr(config, "torch_dtype"):
+                model_config.dtype = config.torch_dtype
+
+            model_path = args.model.lower()
+            import re
+            # 定义关键词规则
+            if re.search(r'gpt(?:[0-9\-_])*[0-9]', model_path) or \
+                'gpt2' in model_path or 'gpt-neo' in model_path or 'gpt-j' in model_path or 'gpt-large' in model_path:
+                model_config.num_layers = config.num_hidden_layers
+                model_config.num_heads = config.num_attention_heads
+                model_config.hidden_size = config.n_embd
+                model_config.seq_len = config.n_ctx
+                model_config.vocab_size = config.vocab_size
+
+            if 'qwen' in model_path or \
+                re.search(r'q?wen[0-9\-_]*[0-9]', model_path) or \
+                'llama' in model_path :  # 匹配 qwen, qwen3, wen3 等
+                model_config.num_layers = config.num_hidden_layers
+                model_config.num_heads = config.num_attention_heads
+                model_config.hidden_size = config.hidden_size
+                model_config.seq_len = config.max_position_embeddings
+                model_config.vocab_size = config.vocab_size
+                if hasattr(config, "num_experts_per_tok"):
+                    model_config.if_moe = True
+                    model_config.top_k = config.num_experts_per_tok
+                else:
+                    model_config.if_moe = False
+
+            print(f"Model config:  dtype = {model_config.dtype}, num_layers = {model_config.num_layers}, \
+                    num_heads = {model_config.num_heads}, seq_len = {model_config.seq_len}, \
+                    vocab_size = {model_config.vocab_size}")
+            
 
         def hf_model_provider(**kwargs) -> nn.Module:
             model_path = kwargs["model_path"]
@@ -394,9 +418,9 @@ class TorchModelProfileTest(unittest.TestCase):
             config = AutoConfig.from_pretrained(model_path)
             config.use_cache = False
 
-            config.num_hidden_layers = profiler_layer_num
+            config.num_hidden_layers = args.profiler_layer_num
             if hasattr(config, "n_layer"):
-                config.n_layer = profiler_layer_num
+                config.n_layer = args.profiler_layer_num
 
             if is_fake:
                 print(f"[Fake Mode] Creating model structure only: {model_path}")
@@ -405,19 +429,19 @@ class TorchModelProfileTest(unittest.TestCase):
                 print(f"[Real Mode] Loading pretrained weights: {model_path}")       
                 model = AutoModelForCausalLM.from_pretrained(
                     model_path,
-                    torch_dtype=dtype,
+                    torch_dtype=model_config.dtype,
                     low_cpu_mem_usage=True,
                     config=config,
                 )
 
                 # GPT-2 bloom etc.
                 if hasattr(model, "transformer") and hasattr(model.transformer, "h"):
-                    if len(model.transformer.h) > profiler_layer_num:
-                        model.transformer.h = nn.ModuleList([model.transformer.h[:profiler_layer_num]])
+                    if len(model.transformer.h) > args.profiler_layer_num:
+                        model.transformer.h = nn.ModuleList([model.transformer.h[:args.profiler_layer_num]])
                 # LLaMA  Qwen Mistral etc.
                 elif hasattr(model, "model") and hasattr(model.model, "layers"):
-                    if len(model.model.layers) > profiler_layer_num:
-                        model.model.layers = nn.ModuleList([model.model.layers[:profiler_layer_num]])
+                    if len(model.model.layers) > args.profiler_layer_num:
+                        model.model.layers = nn.ModuleList([model.model.layers[:args.profiler_layer_num]])
                 else:
                     raise ValueError("Unsupported model type")
 
@@ -425,90 +449,77 @@ class TorchModelProfileTest(unittest.TestCase):
 
             return model
  
- 
+        args = argparse.Namespace(
+            model="/build/Qwen3-30B-A3B",  
+            # model="/build/Llama-2-7b-hf",  
+            # model="/build/Llama-3.1-8B",  
+            # model="/build/Qwen3-0.6B",  
+            # model="/build/gpt2-xl",  
+            device=torch.device("cuda") ,
+            micro_bs = 1,
+            global_bs = 1,
+            enable_torch_profiler = False,
+            profiler_layer_num = 1,
+            skip_profiler = False,
+        )
+
+        get_hf_model_config(args.model)
+        model_config.dtype=torch.float16
+
         _model_loader_class = ShadowModelLoader
         model_loader = _model_loader_class(
             model_provider=hf_model_provider,
-            model_kwargs={"model_path": args.model, "dtype": args.dtype},
+            model_kwargs={"model_path": args.model},
             fake_device_str=args.device
         )
         model = model_loader.load()
 
-        config = transformers.AutoConfig.from_pretrained(args.model, trust_remote_code=True)
+        input_ids = torch.randint(0, model_config.vocab_size, (args.micro_bs, model_config.seq_len), dtype=torch.long).to(args.device)
+        if args.skip_profiler == False:
+            graph = transform_to_ir_graph(model, input_ids)
 
-        model_path = args.model.lower()
-        import re
-        # 定义关键词规则
-        if re.search(r'gpt(?:[0-9\-_])*[0-9]', model_path) or \
-            'gpt2' in model_path or 'gpt-neo' in model_path or 'gpt-j' in model_path or 'gpt-large' in model_path:
-            model_config.num_layers = config.num_hidden_layers
-            model_config.num_heads = config.num_attention_heads
-            model_config.hidden_size = config.n_embd
-            model_config.seq_len = config.n_ctx
-            model_config.vocab_size = config.vocab_size
+            num_stages = 1
+            base_layers = model_config.num_layers // num_stages
+            start = 0
+            layer_to_stage_mapping = []
+            for i in range(num_stages):
+                end = start + base_layers * (i+1)
+                layer_to_stage_mapping.append(list(range(start, end)))
+                start = end
+            logging.debug(f"layer_to_stage_mapping = {layer_to_stage_mapping}")
+            op_to_layer_mapping = get_op_layer_mapping(graph)
+            num_micro_batches = args.global_bs // args.micro_bs
 
-        if 'qwen' in model_path or \
-            re.search(r'q?wen[0-9\-_]*[0-9]', model_path) or \
-            'llama' in model_path :  # 匹配 qwen, qwen3, wen3 等
-            model_config.num_layers = config.num_hidden_layers
-            model_config.num_heads = config.num_attention_heads
-            model_config.hidden_size = config.hidden_size
-            model_config.seq_len = config.max_position_embeddings
-            model_config.vocab_size = config.vocab_size
-            if hasattr(config, "num_experts_per_tok"):
-                model_config.if_moe = True
-                model_config.top_k = config.num_experts_per_tok
-            else:
-                model_config.if_moe = False
+            parallelismPlan = ParallelismPlan(
+                pipeline_type="1f1b",
+                num_microbatches=num_micro_batches,
+                pipeline_parallel_degree=1, 
+                tensor_parallel_degree=1,    
+                data_parallel_degree=1,
+                op_to_layer_mapping=op_to_layer_mapping,
+                layer_to_stage_mapping=layer_to_stage_mapping,
+            )
 
-        print(f"Model config:  num_layers = {model_config.num_layers}, \
-              num_heads = {model_config.num_heads}, seq_len = {model_config.seq_len}, \
-                vocab_size = {model_config.vocab_size}")
+            # Profile
+            profiler = CriusDistProfiler(
+                profiled_data_path = get_filename_include_path(),
+            )
+            e2e_latency = profiler.profile(
+                model=model,
+                base_input_args=(input_ids, ),
+                parallelism_plan=parallelismPlan,
+                only_forward=True,
+            )
 
-        input_ids = torch.randint(0, model_config.vocab_size, (micro_bs, model_config.seq_len), dtype=torch.long).to(device)
-        graph = transform_to_ir_graph(model, input_ids)
-
-        num_stages = 1
-        base_layers = model_config.num_layers // num_stages
-        start = 0
-        layer_to_stage_mapping = []
-        for i in range(num_stages):
-            end = start + base_layers * (i+1)
-            layer_to_stage_mapping.append(list(range(start, end)))
-            start = end
-        logging.debug(f"layer_to_stage_mapping = {layer_to_stage_mapping}")
-        op_to_layer_mapping = get_op_layer_mapping(graph)
-        num_micro_batches = global_bs // micro_bs
-
-        parallelismPlan = ParallelismPlan(
-            pipeline_type="1f1b",
-            num_microbatches=num_micro_batches,
-            pipeline_parallel_degree=1, 
-            tensor_parallel_degree=1,    
-            data_parallel_degree=1,
-            op_to_layer_mapping=op_to_layer_mapping,
-            layer_to_stage_mapping=layer_to_stage_mapping,
-        )
-
-        # Profile
-        profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
-        )
-        e2e_latency = profiler.profile(
-            model=model,
-            base_input_args=(input_ids, ),
-            parallelism_plan=parallelismPlan,
-            only_forward=True,
-        )
-
-        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms <=======")
+            print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms <=======")
 
         ################# Real profiling #################
+        # print(f"<============= Step 2: real profiling with dtype {model_config.dtype}")
         _model_loader_class = ModelLoader
         model_loader = _model_loader_class(
             model_provider=hf_model_provider,
-            model_kwargs={"model_path": args.model, "device": args.device, "dtype": args.dtype},
-            device_str=device,
+            model_kwargs={"model_path": args.model, "device": args.device, "dtype": model_config.dtype},
+            device_str=args.device,
         )
         model = model_loader.load()
 
@@ -517,9 +528,9 @@ class TorchModelProfileTest(unittest.TestCase):
         for _ in range(10):
             with torch.no_grad():
                 _ = model(input_ids)
-        torch.cuda.synchronize(device)
+        torch.cuda.synchronize(args.device)
 
-        if not enable_torch_profiler:     
+        if not args.enable_torch_profiler:     
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)  
             # Measure

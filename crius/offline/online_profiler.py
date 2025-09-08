@@ -6,6 +6,7 @@ from typing import (Any, Dict, List, Optional, Tuple, Union, Callable)
 from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
 from crius.compile.graph import IRNode
 from crius.global_envs import logger
+from crius.util import get_comp_file
 
 
 def get_optype_func(op_type: str) -> Callable:
@@ -28,11 +29,12 @@ def get_optype_func(op_type: str) -> Callable:
 
 def online_single_op(node: IRNode) -> float:
 
+    store_path, filename = get_comp_file()
     profile_configs = OfflineProfileConfigs()
     offline_profiler = CriusOfflineDataManager(
-        profile_configs=profile_configs,
-        to_store_path='./crius/offline/',
-        data_filename='prof_data.pkl',
+        profile_configs = profile_configs,
+        to_store_path = store_path,
+        data_filename = filename,
     )
 
     input_shapes, output_shapes = node.input_shapes, node.output_shapes
@@ -136,7 +138,7 @@ def online_single_op(node: IRNode) -> float:
         op_latency = offline_profiler.benchmark_rsqrt(input_shapes, dtype=dtype)
     elif op_type == 'to':
         ifWrite = False
-        op_latency = offline_profiler.benchmark_to_dtype(input_shapes, output_shapes, dtype=dtype)
+        op_latency = offline_profiler.benchmark_to_dtype(input_shapes, output_shapes, from_dtype=node.pre_dtype, to_dtype=dtype)
     elif op_type == 'linear':
         seq_len=input_shapes[0][1]
         left_hidden_dim=input_shapes[0][2]

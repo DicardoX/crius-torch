@@ -71,10 +71,16 @@ class CriusDistProfiler:
         # Step 2. Query and record per-operator latencies
         graph = self._query_operator_latencies_ms(graph)
         for node in graph.nodes:
-            logger.debug(f"=====> Node target: {node.target}")
-            logger.debug(f"Node name: {node.name} | OP type: {node.op} | " + 
-                         f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
-                         f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
+            if node.target in ['to']:
+                logger.debug(f"=====> Node target: {node.target}")
+                logger.debug(f"Node name: {node.name} | OP type: {node.op} | dtype: {node.dtype} | pre_dtype: {node.pre_dtype} ? " +
+                            f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
+                                f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
+            else:
+                logger.debug(f"=====> Node target: {node.target}")
+                logger.debug(f"Node name: {node.name} | OP type: {node.op} | dtype: {node.dtype} | " +
+                            f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
+                                f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
@@ -96,9 +102,10 @@ class CriusDistProfiler:
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
                     input_shapes, output_shapes = node.input_shapes, node.output_shapes
+                    print(f"node target: {node.target}, layer_type: {node.layer_type}, input_shapes = {input_shapes}, output_shapes = {output_shapes}")
 
                     if node.layer_type == 'unknown':
-                        node_latency = 0.002 #所有没有分类的小算子都模式0.002ms
+                        node_latency = 0.002 #?????????????0.002ms
                         setattr(node, "latency", node_latency)
                         continue
 
@@ -108,11 +115,12 @@ class CriusDistProfiler:
                         continue
 
                     query_key = CriusOfflineDataManager.get_query_key(
-                        op_type=node.layer_type, input_shapes=input_shapes, output_shapes=output_shapes
+                        op_type=node.layer_type, dtype=node.dtype, input_shapes=input_shapes, output_shapes=output_shapes
                     )
 
                     if query_key in self._profiled_data:
                         node_latency = self._profiled_data[query_key]["latency_ms"]
+                        logger.debug(f"Query key {query_key} found, offline profile {node_latency}ms.")
                     else:
                         node_latency = online_single_op(node)
                         logger.warning(f"Query key {query_key} not found, online profile {node_latency}ms.")

@@ -337,8 +337,53 @@ def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
         else:
             dtype = None
         setattr(node, 'dtype', dtype)
+
+    # 再处理 to 算子，设置 pre_dtype
+        if node.op in ['call_function', 'call_method'] and node.target in ['to', torch.Tensor.to]:
+            source_node = find_source_tensor_node(node)
+            pre_dtype = getattr(source_node, 'dtype', None) if source_node else None
+            setattr(node, 'pre_dtype', pre_dtype)
+        else:
+            setattr(node, 'pre_dtype', None)
     
     return graph
+
+
+def find_source_tensor_node(to_node: fx.Node):
+    """
+    找到 to 算子的“源张量”输入节点（即真正要被转换的那个张量）。
+    """
+    TO_ARG_KEYS = {'device', 'dtype', 'non_blocking', 'copy', 'memory_format'}
+
+    # 1. 检查 args
+    for arg in to_node.args:
+        if not isinstance(arg, fx.Node):
+            continue
+        # 判断是否是真正的张量（排除 device/dtype 等 scalar）
+        if is_tensor_node(arg):
+            return arg
+
+    # 2. 检查 kwargs
+    for key, value in to_node.kwargs.items():
+        if key in TO_ARG_KEYS:
+            continue
+        if isinstance(value, fx.Node) and is_tensor_node(value):
+            return value
+
+    return None
+
+
+def is_tensor_node(node: fx.Node) -> bool:
+    """
+    判断一个 Node 是否是张量（通过 shape 判断，排除 scalar）
+    """
+    if not hasattr(node, 'meta') or 'tensor_meta' not in node.meta:
+        return False
+    tensor_meta = node.meta['tensor_meta']
+    # 如果有 shape 且不是标量，则认为是张量
+    if hasattr(tensor_meta, 'shape'):
+        return tensor_meta.shape != torch.Size([])
+    return True
 
 
 def infer_node_layer_types(graph: IRGraph) -> IRGraph:

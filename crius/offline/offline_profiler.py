@@ -518,13 +518,13 @@ class CriusOfflineDataManager:
         return op_latency_
     
     def benchmark_to_dtype(self,
-                        input_shapes, output_shapes,
-                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
+                        input_shapes, output_shapes, device: str = "cuda:0",  
+                        from_dtype: torch.dtype = torch.float16, to_dtype: torch.dtype = torch.float16,
                         num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
         
-        x = torch.randn(*input_shapes, device=device, dtype=torch.float32)
+        x = torch.randn(*input_shapes, device=device, dtype=from_dtype)
         for _ in range(num_warmup_steps):
-            _ = x.to(dtype)
+            _ = x.to(to_dtype)
         torch.cuda.synchronize()
 
         # Timer events
@@ -534,7 +534,7 @@ class CriusOfflineDataManager:
         # Benchmark
         start_event.record()
         for _ in range(num_profile_steps):
-            _ = x.to(dtype)
+            _ = x.to(to_dtype)
         end_event.record()
         torch.cuda.synchronize()
 

@@ -15,7 +15,7 @@ from torch import nn
 import argparse
 import gc
 import unittest
-
+from crius.util import get_comp_file
 
 
 
@@ -46,10 +46,11 @@ class TorchModelProfileTest(unittest.TestCase):
             force_overwrite=True,
         )
 
+        store_path, data_file = get_comp_file()
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         
         print("\ntorch.mul ===========================")
@@ -60,8 +61,8 @@ class TorchModelProfileTest(unittest.TestCase):
         profile_configs.gemm_op_type = torch.tril
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         print("\n\ntorch tril ===========================")
         offline_profiler.profile_single_input_gemm()
@@ -69,8 +70,8 @@ class TorchModelProfileTest(unittest.TestCase):
         profile_configs.gemm_op_type = torch.eq
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         print("\n\ntorch eq ===========================")
         offline_profiler.profile_single_input_gemm()
@@ -78,8 +79,8 @@ class TorchModelProfileTest(unittest.TestCase):
         profile_configs.gemm_op_type = torch.add
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         print("\n\ntorch add ===========================")
         offline_profiler.profile_single_input_gemm()
@@ -87,8 +88,8 @@ class TorchModelProfileTest(unittest.TestCase):
         profile_configs.gemm_op_type = torch.addmm
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         print("\n\ntorch addmm ===========================")
         offline_profiler.benchmark_addmm(1600, 6400, 4096)
@@ -113,10 +114,12 @@ class TorchModelProfileTest(unittest.TestCase):
             num_profile_steps=10,
             force_overwrite=True,
         )
+
+        store_path, data_file = get_comp_file()
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            to_store_path=store_path,
+            data_filename=data_file,
         )
         
         offline_profiler.profile_all_gemm()
