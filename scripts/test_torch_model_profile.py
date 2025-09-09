@@ -464,7 +464,7 @@ class TorchModelProfileTest(unittest.TestCase):
         )
 
         get_hf_model_config(args.model)
-        model_config.dtype=torch.float16
+        # model_config.dtype=torch.float16
 
         _model_loader_class = ShadowModelLoader
         model_loader = _model_loader_class(
