@@ -16,6 +16,8 @@ from crius.compile.graph.transform import (
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
 
+from crius.compile.graph.criustracer import CriusTracer
+
 __all__ = [
     "CompileConfigs",
     "compile",
@@ -45,10 +47,15 @@ def compile(
     """
     
     # Step 1. Transform model into IR graph
-    graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
+    # graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
     # Step 2. Propagate per-node input/output shapes
-    graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
-    graph = infer_node_layer_types(graph)
+    # graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
+    # graph = infer_node_layer_types(graph)
+
+    # Step 2.5 New Tracer
+    tracer = CriusTracer()
+    graph = tracer.trace(model)
+
     # Step 3. Insert communication primitives
     graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan)
 

@@ -10,6 +10,7 @@ from typing import (List, Callable, Any, Optional, Union)
 import torch
 from torch import nn
 import torch._dynamo as dynamo
+from torch.fx import Graph, Node
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
@@ -96,7 +97,8 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
 
 
 def insert_comm_primitives_into_graph(
-    graph: IRGraph,
+    # graph: IRGraph,
+    graph: Graph,
     parallelism_plan: ParallelismPlan,
  ) -> IRGraph:
     """ Insert IR nodes of communication primitives in IR graph, based on the parallelism plan. 
@@ -106,4 +108,75 @@ def insert_comm_primitives_into_graph(
         parallelism_plan: How the to-be-compiled model would be parallelized.
     """
     # TODO(chunyu): Implement this function.
+    def is_column_parallel_linear_boundary(node: Node, graph: Graph) -> bool:
+        if node.name in graph.node_layer_mapping:
+            node_layer_info = graph.node_layer_mapping[node.name]
+        else:
+            return False
+        
+        if str(node_layer_info['layer_class']) != "ColumnParallelLinear":
+            return False
+        
+        next_node = node.next
+
+        if next_node is None:
+            return True
+        
+        next_node_layer_info = graph.node_layer_mapping[next_node.name]
+
+        if str(next_node_layer_info['layer_class']) != "ColumnParallelLinear" or \
+        (str(next_node_layer_info['layer_class']) == "ColumnParallelLinear" and \
+         str(node_layer_info['module_path']) != str(next_node_layer_info['module_path'])):
+            return True
+        
+        return False
+    
+    def is_row_parallel_linear_boundary(node: Node, graph: Graph) -> bool:
+        if node.name in graph.node_layer_mapping:
+            node_layer_info = graph.node_layer_mapping[node.name]
+        else:
+            return False
+        
+        if str(node_layer_info['layer_class']) != "RowParallelLinear":
+            return False
+        
+        next_node = node.next
+
+        if next_node is None:
+            return True
+        
+        next_node_layer_info = graph.node_layer_mapping[next_node.name]
+        
+        if str(next_node_layer_info['layer_class']) != "RowParallelLinear" or \
+        (str(next_node_layer_info['layer_class']) == "RowParallelLinear" and \
+         str(node_layer_info['module_path']) != str(next_node_layer_info['module_path'])):
+            return True
+        
+        return False
+        
+    # tp_group = parallelism_plan.tensor_parallel_group
+    # tp_size = parallelism_plan.tensor_parallel_degree
+
+    # if tp_size <= 1:
+    #     return graph
+    
+    # comm_ops = {
+    #     'all_gather': (torch.distribution.all_gather, {'group': tp_group}),
+    #     'all_reduce': (torch.distribution.all_reduce, {'group': tp_group, 'op': torch.distribution.ReduceOp.SUM})
+    # }
+
+    for node in graph.nodes:
+        # print(f"is_cb:{is_column_parallel_linear_boundary(node,graph)}, is_rb:{is_row_parallel_linear_boundary(node,graph)}")
+        if is_column_parallel_linear_boundary(node, graph):
+            with graph.inserting_after(node):
+                comm_node = graph.call_function(torch.distributed.all_gather)
+                # comm_node = Node(graph=graph, name="all_gather", op="call_function", target=torch.distributed.all_gather, args=[], kwargs={})
+        if is_row_parallel_linear_boundary(node, graph):
+            with graph.inserting_after(node):
+                comm_node = graph.call_function(torch.distributed.all_reduce)
+                # comm_node = Node(graph=graph, name="all_reduce", op="call_function", target=torch.distributed.all_gather, args=[], kwargs={})
+            
+
+    print("\n")
+    print(graph)
     return graph
