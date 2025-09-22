@@ -7,13 +7,19 @@
 from typing import (Tuple)
 from dataclasses import dataclass
 from collections import OrderedDict
+import logging
 
 import torch
 
 __all__ = [
     "global_configs",
+    "logger",
 ]
 
+
+# Logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 #########################
 # Global Configurations #

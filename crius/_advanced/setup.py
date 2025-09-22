@@ -1,8 +1,4 @@
-import logging
-
-# Logger
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+from crius.global_envs import logger
 
 __all__ = [
     "check_installation",
