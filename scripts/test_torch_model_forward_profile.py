@@ -402,9 +402,9 @@ class TorchModelProfileTest(unittest.TestCase):
                 else:
                     model_config.if_moe = False
 
-            print(f"Model config:  dtype = {model_config.dtype}, num_layers = {model_config.num_layers}, \
-                    num_heads = {model_config.num_heads}, seq_len = {model_config.seq_len}, \
-                    vocab_size = {model_config.vocab_size}")
+            print(f"Model config:  dtype = {model_config.dtype}, num_layers = {model_config.num_layers}, " +
+                    f"num_heads = {model_config.num_heads}, seq_len = {model_config.seq_len}, " +
+                    f"vocab_size = {model_config.vocab_size}") 
             
 
         def hf_model_provider(**kwargs) -> nn.Module:
@@ -450,21 +450,20 @@ class TorchModelProfileTest(unittest.TestCase):
             return model
  
         args = argparse.Namespace(
-            model="/build/Qwen3-30B-A3B",  
+            # model="/build/Qwen3-30B-A3B",  
             # model="/build/Llama-2-7b-hf",  
             # model="/build/Llama-3.1-8B",  
             # model="/build/Qwen3-0.6B",  
-            # model="/build/gpt2-xl",  
+            model="/build/gpt2-xl",  
             device=torch.device("cuda") ,
-            micro_bs = 1,
-            global_bs = 1,
+            micro_bs = 2,
+            global_bs = 8,
             enable_torch_profiler = False,
-            profiler_layer_num = 1,
+            profiler_layer_num = 12,
             skip_profiler = False,
         )
 
         get_hf_model_config(args.model)
-        # model_config.dtype=torch.float16
 
         _model_loader_class = ShadowModelLoader
         model_loader = _model_loader_class(
@@ -553,7 +552,6 @@ class TorchModelProfileTest(unittest.TestCase):
             accu = e2e_latency / measured_e2e_latency
             print(f"profiling latency = {e2e_latency:.3f}")
             print(f"accu = {accu:.3f}")
-       
 
         else:
 

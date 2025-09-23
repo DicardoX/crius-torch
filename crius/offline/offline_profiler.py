@@ -14,6 +14,7 @@ import torch
 from torch import nn
 
 from crius.global_envs import logger
+from crius.model.model_config import model_config
 
 __all__ = [
     "OfflineProfileConfigs",
@@ -173,14 +174,13 @@ class CriusOfflineDataManager:
         return op_latency_
 
 
-    def benchmark_masked_fill(self,
-                             bs:int, num_heads:int, seq_len:int,
+    def benchmark_masked_fill(self, input_shape,
                             device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
         
-        input_tensor = torch.randn(bs, num_heads, seq_len, seq_len, dtype=dtype, device=device)
+        input_tensor = torch.randn(input_shape, dtype=dtype, device=device)
 
-        mask = torch.rand(bs, num_heads, seq_len, seq_len, dtype=dtype, device=device) > 0.5
+        mask = torch.rand(input_shape, dtype=dtype, device=device) > 0.5
         mask = mask.bool()
         fill_value = float("-inf")
 
@@ -226,17 +226,29 @@ class CriusOfflineDataManager:
         torch.cuda.synchronize()
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-        print(f"tril latency: {op_latency_}, seq_len: {seq_len}, dtype: {dtype}")
         return op_latency_
-    def benchmark_embedding(self, vocab_size: int, embedding_dim: int,
+    
+    def benchmark_embedding(self, input_shape, output_shape,
                             device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
+        '''
+        '''
+
+        if not input_shape or not output_shape:
+            raise ValueError()
         
-        input_op = torch.randint(0, vocab_size, (4, 1024), device=device, dtype=torch.long)
+        # 构造embedding weight from input_shape
+        weight_shape = input_shape
+        vocab_size, embedding_dim = weight_shape[0], weight_shape[1]
+        print(f"vocab_size = {vocab_size}, embedding_dim = {embedding_dim}")
         embedding = torch.nn.Embedding(vocab_size, embedding_dim).to(device=device, dtype=dtype)
 
+        # create input dicices from output shape
+        indices_shape = output_shape[:-1]
+        input_indices = torch.randint(0, vocab_size, indices_shape, device=device, dtype=torch.long)
+
         for _ in range(num_warmup_steps):
-            _ = embedding(input_op)
+            _ = embedding(input_indices)
         torch.cuda.synchronize()
 
         # Timer events
@@ -246,7 +258,7 @@ class CriusOfflineDataManager:
         # Benchmark
         start_event.record()
         for _ in range(num_profile_steps):
-            _ = embedding(input_op)
+            _ = embedding(input_indices)
 
         end_event.record()
         torch.cuda.synchronize()
@@ -254,14 +266,22 @@ class CriusOfflineDataManager:
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
     
-    def benchmark_gelu(self, bs: int, embedding_dim: int, seq_len: int,
+    def benchmark_gelu(self, input_shape,
                             device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
-        input_op = torch.randn(bs, embedding_dim, seq_len, device=device, dtype=dtype)
+        '''
+        normal gelu input: [bs, seq_len, embedding_dim]
+        expert gelu input: [top_k, embedding_dim]
+        '''
+
+        if not input_shape:
+            raise ValueError('input_shape must not be empty.')
+
+        input_tensor = torch.randn(input_shape, device=device, dtype=dtype)
 
         for _ in range(num_warmup_steps):
             with torch.no_grad():
-                torch.nn.functional.gelu(input_op)
+                torch.nn.functional.gelu(input_tensor)
         torch.cuda.synchronize()
 
         # Timer events
@@ -272,7 +292,7 @@ class CriusOfflineDataManager:
         start_event.record()
         for _ in range(num_profile_steps):
             with torch.no_grad():
-                _ = torch.nn.functional.gelu(input_op)
+                _ = torch.nn.functional.gelu(input_tensor)
 
         end_event.record()
         torch.cuda.synchronize()
@@ -280,44 +300,24 @@ class CriusOfflineDataManager:
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
 
-    def benchmark_expert_gelu(self, top_k: int, embedding_dim: int, 
-                            device: str = "cuda:0", dtype: torch.dtype = torch.float16, 
-                            num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
-        input_op = torch.randn(top_k, embedding_dim, device=device, dtype=dtype)
-
-        for _ in range(num_warmup_steps):
-            with torch.no_grad():
-                torch.nn.functional.gelu(input_op)
-        torch.cuda.synchronize()
-
-        # Timer events
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-
-        # Benchmark
-        start_event.record()
-        for _ in range(num_profile_steps):
-            with torch.no_grad():
-                _ = torch.nn.functional.gelu(input_op)
-
-        end_event.record()
-        torch.cuda.synchronize()
-
-        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-        return op_latency_
-
-
-    def benchmark_layernorm(self, bs: int, embedding_dim: int, seq_len: int, 
+    def benchmark_layernorm(self, input_shape,
                             device: str = "cuda", dtype: torch.dtype = torch.float16, 
                             num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
-        print(f"benchmarking layernorm, bs: {bs}, embedding_dim: {embedding_dim}, seq: {seq_len}")
-        input_op = torch.randn(bs, seq_len, embedding_dim, device=device, dtype=dtype)
+        '''
+        input_shape always be: [bs, seq_len, embedding_dim]
+        '''
+        if not input_shape:
+            raise ValueError('input_shape must not be empty.')
+        
+        input_tensor = torch.randn(input_shape, device=device, dtype=dtype)
+        # normalized_shape 通常是最后一个维度（embedding_dim）
+        normalized_shape = input_shape[-1]
 
-        layernorm = torch.nn.LayerNorm(normalized_shape = embedding_dim, device=device, dtype=dtype)
+        layernorm = torch.nn.LayerNorm(normalized_shape = normalized_shape, device=device, dtype=dtype)
 
         for _ in range(num_warmup_steps):
             with torch.no_grad():
-                _ = layernorm(input_op)
+                _ = layernorm(input_tensor)
         torch.cuda.synchronize()
 
         # Timer events
@@ -328,24 +328,28 @@ class CriusOfflineDataManager:
         start_event.record()
         for _ in range(num_profile_steps):
             with torch.no_grad():
-                _ = layernorm(input_op)
+                _ = layernorm(input_tensor)
 
         end_event.record()
         torch.cuda.synchronize()
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        print(f"layernorm latency: {op_latency_} ms")
         return op_latency_
     
-    def benchmark_sdpa(self,
-                      bs: int, num_heads: int, seq_len: int, dim_per_head: int,
+    def benchmark_sdpa(self, input_shape,
                       device: str = "cuda:0", dtype: torch.dtype = torch.float16,
                       num_warmup_steps: int = 5, num_profile_steps: int = 10) -> float:
         '''
        算子 scaled_dot_product_attention 的离线分析
+       input_shape always be: [bs, num_heads, seq_len, dim_per_head]
         '''
-        q = torch.randn(bs, num_heads, seq_len, dim_per_head, device=device, dtype=dtype, requires_grad=False)
-        k = torch.randn(bs, num_heads, seq_len, dim_per_head, device=device, dtype=dtype, requires_grad=False)
-        v = torch.randn(bs, num_heads, seq_len, dim_per_head, device=device, dtype=dtype, requires_grad=False)
+
+        if not input_shape:
+            raise ValueError('input_shape must not be empty.')
+        q = torch.randn(input_shape, device=device, dtype=dtype, requires_grad=False)
+        k = torch.randn(input_shape, device=device, dtype=dtype, requires_grad=False)
+        v = torch.randn(input_shape, device=device, dtype=dtype, requires_grad=False)
         
         for _ in range(num_warmup_steps):
             _ = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=True)
@@ -434,11 +438,12 @@ class CriusOfflineDataManager:
         return op_latency_
     
     def benchmark_topk(self,
-                        bs: int, topk: int, expert_nums: int, seq_len: int, 
+                        input_shape,
                         device: str = "cuda:0", dtype: torch.dtype = torch.float16,
                         num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
-        total_tokens = bs * seq_len
-        scores = torch.randn(total_tokens, expert_nums, device=device, dtype=dtype)
+
+        scores = torch.randn(input_shape, device=device, dtype=dtype)
+        topk = model_config.top_k
 
         for _ in range (num_warmup_steps):
             _ = torch.topk(scores, k=topk, dim=-1)
@@ -458,20 +463,24 @@ class CriusOfflineDataManager:
 
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
-        
+
     def benchmark_softmax(self,
-                          bs: int, num_heads: int, seq_len: int, hidden_size: int =0,
+                          input_shape,
                           device: str = "cuda:0", dtype: torch.dtype = torch.float16,
                           num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
         
-        if hidden_size == 0:
-            left_op = torch.randn(bs, num_heads, seq_len, seq_len, device=device, dtype=dtype)
-            print(dtype)
-        else:
-            left_op = torch.randn(seq_len, hidden_size, device=device, dtype=dtype)
+        '''
+        benchmark torch.softmax using input shape
+        input_shape always be: [bs, num_heads, seq_len] or [seq_len, hidden_size ?? top_k]
+        '''
+
+        if not input_shape:
+            raise ValueError("input shapes must not be empty")
         
+        input_tensor = torch.randn(input_shape, device=device, dtype=dtype)
+                
         for _ in range(num_warmup_steps):
-            torch.softmax(left_op, dim=-1)
+            torch.softmax(input_tensor, dim=-1)
         torch.cuda.synchronize()
 
         # Timer events
@@ -481,7 +490,7 @@ class CriusOfflineDataManager:
         # Benchmark
         start_event.record()
         for _ in range(num_profile_steps):
-            torch.softmax(left_op, dim=-1)
+            torch.softmax(input_tensor, dim=-1)
 
         end_event.record()
         torch.cuda.synchronize()
@@ -518,7 +527,7 @@ class CriusOfflineDataManager:
         return op_latency_
     
     def benchmark_to_dtype(self,
-                        input_shapes, output_shapes, device: str = "cuda:0",  
+                        input_shapes, device: str = "cuda:0",  
                         from_dtype: torch.dtype = torch.float16, to_dtype: torch.dtype = torch.float16,
                         num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
         
@@ -564,42 +573,24 @@ class CriusOfflineDataManager:
         op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
         return op_latency_
 
-    def benchmark_expert_linear(self, top_k: int, 
-                        input_size: int, output_size: int, 
+    def benchmark_linear(self, input_shape, output_shape, 
                         device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
                         num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
+
+        '''
+        benchmark torch.nn.functional.linear
+        expert Linear: input always [top_k, in_feature]
+        standard Linear: input always [bs, seq_len, in_feature]
+        '''
+        if not input_shape or not output_shape:
+            raise ValueError('input_shapes ond output_shapes must not be empty.')
         
-        weight = torch.randn(output_size, input_size, device=device, dtype=dtype)
-        bias = torch.randn(output_size, device=device, dtype=dtype)
-        x = torch.randn(top_k, input_size, device=device, dtype=dtype)
+        out_features = output_shape[-1]
+        in_features = input_shape[-1]
 
-        for _ in range(num_warmup_steps):
-            with torch.no_grad():
-                _ = torch.nn.functional.linear(x, weight, bias)
-            torch.cuda.synchronize()
-
-        # Timer events
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
-
-        start_event.record()
-        for _ in range(num_profile_steps):
-            with torch.no_grad():
-                _ = torch.nn.functional.linear(x, weight, bias)
-        end_event.record()
-        torch.cuda.synchronize()
-
-        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-        return op_latency_
-
-    def benchmark_linear(self, bs: int, seq_len: int, 
-                        input_size: int, output_size: int, 
-                        device: str = "cuda:0",  dtype: torch.dtype = torch.float16,
-                        num_warmup_steps: int = 5, num_profile_steps: int = 5) -> float:
-        
-        weight = torch.randn(output_size, input_size, device=device, dtype=dtype)
-        bias = torch.randn(output_size, device=device, dtype=dtype)
-        x = torch.randn(bs, seq_len, input_size, device=device, dtype=dtype)
+        weight = torch.randn(out_features, in_features, device=device, dtype=dtype)
+        bias = torch.randn(out_features, device=device, dtype=dtype)
+        x = torch.randn(input_shape, device=device, dtype=dtype)
 
         for _ in range(num_warmup_steps):
             with torch.no_grad():
@@ -830,6 +821,9 @@ class CriusOfflineDataManager:
     def get_comm_query_key(self, op_type: str, dtype: str, batch_size: int, seq_len: int, 
                            num_heads: int = 0, vocab_size: int = 0, embedding_dim: int = 0,
                            input_dim: int = 0, output_dim: int = 0) -> str:
+        
+        #dtype  eg: torch.float32 only retrun float32
+        dtype = str(dtype).split('.')[-1]
         """ Generate a unique query key for the GEMM operation. """
         return f"{op_type}_{dtype}_b{batch_size}_s{seq_len}_h{num_heads}_v{vocab_size}_e{embedding_dim}_i{input_dim}_o{output_dim}"
     
@@ -925,9 +919,10 @@ class CriusOfflineDataManager:
                                                 left_op_hidden_dim=0, right_op_hidden_dim=0)
             
         elif op_type == 'topk':
-            seq_len = input_shapes[0][0]
+            total_tokens = input_shapes[0][0]
             expert_nums = input_shapes[0][1]
-            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=1, seq_len=seq_len, num_heads=expert_nums, vocab_size=0,
+            query_key = cls.get_comm_query_key(op_type=op_type, dtype=dtype, batch_size=1, 
+                                               seq_len=total_tokens, num_heads=expert_nums, vocab_size=0,
                                                embedding_dim=0, input_dim=0, output_dim=0)
             
         elif op_type =='expert_linear':
