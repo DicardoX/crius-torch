@@ -4,6 +4,10 @@
 
 import os
 import sys
+import warnings
+warnings.filterwarnings("ignore", 
+                        category=UserWarning,
+                        module="megatron.core.transformer.transformer_config")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 app_root = os.path.dirname(current_dir)
@@ -79,7 +83,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -105,7 +109,8 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile_all_gemm()
+        # offline_profiler.profile_all_gemm()
+        offline_profiler.profile_all_comm()
 
     @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
@@ -232,7 +237,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
             prof.export_chrome_trace('/app/torch_exec_trace.json')
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 

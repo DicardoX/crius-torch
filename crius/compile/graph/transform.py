@@ -153,6 +153,29 @@ def insert_comm_primitives_into_graph(
             return True
         
         return False
+    
+    def is_pipeline_boundary(node: Node, graph: Graph) -> bool:
+        if node.name in graph.node_layer_mapping:
+            node_layer_info = graph.node_layer_mapping[node.name]
+        else:
+            return False
+        
+        if str(node_layer_info['layer_class']) != "RowParallelLinear":
+            return False
+        
+        next_node = node.next
+
+        if next_node is None:
+            return True
+        
+        next_node_layer_info = graph.node_layer_mapping[next_node.name]
+        
+        if str(next_node_layer_info['layer_class']) != "RowParallelLinear" or \
+        (str(next_node_layer_info['layer_class']) == "RowParallelLinear" and \
+         str(node_layer_info['module_path']) != str(next_node_layer_info['module_path'])):
+            return True
+        
+        return False
         
     # tp_group = parallelism_plan.tensor_parallel_group
     # tp_size = parallelism_plan.tensor_parallel_degree
@@ -175,6 +198,10 @@ def insert_comm_primitives_into_graph(
             with graph.inserting_after(node):
                 comm_node = graph.call_function(torch.distributed.all_reduce)
                 # comm_node = Node(graph=graph, name="all_reduce", op="call_function", target=torch.distributed.all_gather, args=[], kwargs={})
+
+        if is_pipeline_boundary(node, graph):
+            with graph.inserting_after(node):
+                comm_node = graph.call_function(torch.distributed.send_rev)
             
 
     print("\n")

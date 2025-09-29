@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 import time
 import argparse
+import socket
 import numpy as np
 from typing import List, Tuple
 
@@ -12,9 +13,18 @@ os.environ['NCCL_IB_DISABLE'] = '1'
 
 def setup(rank, world_size):
     """init-dist"""
+    # sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # sock.bind(('localhost', 0))
+    # port = sock.getsockname()[1]
+    # sock.close()
+    
+    # os.environ['MASTER_ADDR'] = 'localhost'
+    # os.environ['MASTER_PORT'] = str(port)
+    # os.environ['WORLD_SIZE'] = str(world_size)
+    # os.environ['RANK'] = str(rank)
     dist.init_process_group(
         backend="nccl",
-        init_method="tcp://127.0.0.1:12345",
+        init_method="env://",
         world_size=world_size,
         rank=rank
     )
@@ -132,7 +142,7 @@ def run_benchmark(rank, world_size, args):
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark torch.distributed collective operations")
-    parser.add_argument("--world-size", type=int, default=2, help="Number of processes")
+    parser.add_argument("--world-size", type=int, default=4, help="Number of processes")
     parser.add_argument("--iterations", type=int, default=100, help="Number of iterations per test")
     args = parser.parse_args()
     

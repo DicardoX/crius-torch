@@ -5,13 +5,22 @@
 """ Offline profiler to collect operator-level performance metrics ahead of time. """
 
 import os
-from typing import (Any, Dict, List, Optional, Tuple, Union, Callable)
+import sys
+os.environ['NCCL_SHM_DISABLE'] = '1'  
+os.environ['NCCL_P2P_DISABLE'] = '1'  
+os.environ['NCCL_IB_DISABLE'] = '1'   
+
+from typing import (Any, Dict, List, Optional, Tuple, Union, Callable, overload)
 from dataclasses import dataclass
 import pickle
 import gc
-
+import socket
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from torch import nn
+
+import time 
 
 from crius.global_envs import logger
 
@@ -51,6 +60,15 @@ class OfflineProfileConfigs:
     gemm_right_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the right operand in GEMM operations. """
 
+    comm_op_types: List[Callable] = None
+    """ ###### """
+
+    tp_degrees: List[int] = None
+    """ ###### """
+
+    comm_data_sizes: List[int] = None
+    """ ###### """
+
     dtype: torch.dtype = torch.float16
     """ Data type for profiling. Default is float16. """
 
@@ -72,10 +90,167 @@ class OfflineProfileConfigs:
             self.gemm_left_op_hidden_dims = [128, 256, 512, 1024]
         if self.gemm_right_op_hidden_dims is None:
             self.gemm_right_op_hidden_dims = [128, 256, 512, 1024]
+        if self.comm_op_types is None:
+            self.comm_op_types = [
+                # torch.distribution.all_gather,
+                # torch.distribution.all_reduce,
+                "all_gather",
+                "all_reduce"
+            ]
+        if self.tp_degrees is None:
+            self.tp_degrees = [2, 4, 8, 16]
+        if self.comm_data_sizes is None:
+            self.comm_data_sizes = [
+                1024, 4096, 16384, 65536, 262144,  # QKV
+
+                1048576, 4194304, 16777216,        # MLP
+
+                67108864, 134217728, 268435456     # grad
+            ]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
 
+os.environ['NCCL_SHM_DISABLE'] = '1'  
+os.environ['NCCL_P2P_DISABLE'] = '1'  
+os.environ['NCCL_IB_DISABLE'] = '1'   
+
+def setup(rank, world_size):
+    """init-dist"""
+    # sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # sock.bind(('localhost', 0))
+    # port = sock.getsockname()[1]
+    # sock.close()
+    
+    # os.environ['MASTER_ADDR'] = 'localhost'
+    # os.environ['MASTER_PORT'] = str(port)
+    # os.environ['WORLD_SIZE'] = str(world_size)
+    # os.environ['RANK'] = str(rank)
+    dist.init_process_group(
+        backend="nccl",
+        init_method="env://",
+        world_size=world_size,
+        rank=rank
+    )
+
+def cleanup():
+    """clear-dist"""
+    dist.destroy_process_group()
+
+def benchmark_all_reduce(rank, world_size, tensor_sizes: List[int], num_iterations):
+    """base all_reduce"""
+    results = {}
+    
+    for size in tensor_sizes:
+        # create tensor
+        tensor = torch.randn(size, device=f"cuda:{rank}")
+        
+        # warmup
+        for _ in range(10):
+            dist.all_reduce(tensor)
+        
+        # sync
+        dist.barrier()
+        
+        # timing
+        start_time = time.time()
+        for _ in range(num_iterations):
+            dist.all_reduce(tensor)
+        dist.barrier()
+        end_time = time.time()
+        
+        # cal average latency(ms)
+        avg_latency = (end_time - start_time) * 1000 / num_iterations
+        results[size] = avg_latency
+        
+        # if rank == 0:
+            # print(f"AllReduce - Size: {size}, Avg Latency: {avg_latency:.4f} ms")
+    
+    return results
+
+def benchmark_all_gather(rank, world_size, tensor_sizes: List[int], num_iterations):
+    """base all_gather"""
+    results = {}
+    
+    for size in tensor_sizes:
+        # create tensor
+        tensor = torch.randn(size, device=f"cuda:{rank}")
+        output_tensors = [torch.zeros_like(tensor) for _ in range(world_size)]
+        
+        # warmup
+        for _ in range(10):
+            dist.all_gather(output_tensors, tensor)
+        
+        # sync
+        dist.barrier()
+        
+        # timing
+        start_time = time.time()
+        for _ in range(num_iterations):
+            dist.all_gather(output_tensors, tensor)
+        dist.barrier()
+        end_time = time.time()
+        
+        # cal average latency(ms)
+        avg_latency = (end_time - start_time) * 1000 / num_iterations
+        results[size] = avg_latency
+        
+        # if rank == 0:
+            # print(f"AllGather - Size: {size}, Avg Latency: {avg_latency:.4f} ms")
+    
+    return results
+
+def run_benchmark(rank, world_size, configs):
+    """run base test"""
+    setup(rank, world_size)
+    
+    # tensor size
+    tensor_sizes = [
+        1024,        # 1K
+        10240,       # 10K
+        102400,      # 100K
+        1024000,     # 1M
+        10240000,    # 10M
+    ]
+    
+    if rank == 0:
+        print(f"=== Benchmark with World Size: {world_size} ===")
+        print(f"Number of iterations: {configs.num_profile_steps}")
+        print(f"Tensor sizes: {tensor_sizes}")
+        print("-" * 50)
+    
+    # all_reduce test
+    if rank == 0:
+        print("\nTesting all_reduce...")
+    all_reduce_results = benchmark_all_reduce(rank, world_size, tensor_sizes, configs.num_profile_steps)
+    
+    # all_gather test
+    if rank == 0:
+        print("\nTesting all_gather...")
+    all_gather_results = benchmark_all_gather(rank, world_size, tensor_sizes, configs.num_profile_steps)
+    
+    # gather at rank0
+    if rank == 0:
+        print("\n" + "="*50)
+        print("SUMMARY RESULTS:")
+        print("="*50)
+        print("\nall_reduce Results:")
+        for size, latency in all_reduce_results.items():
+            print(f"Size: {size:8d} | Latency: {latency:.4f} ms")
+        
+        print("\nall_gather Results:")
+        for size, latency in all_gather_results.items():
+            print(f"Size: {size:8d} | Latency: {latency:.4f} ms")
+    
+    cleanup()
+
+def launch(tp_degree, configs):
+    torch.multiprocessing.spawn(
+        run_benchmark,
+        args=(tp_degree, configs),
+        nprocs=tp_degree,
+        join=True
+    )
 
 class CriusOfflineDataManager:
     """ Crius operator-level offline data manager. 
@@ -185,7 +360,22 @@ class CriusOfflineDataManager:
                         self._write_one_entry(query_key, op_latency, None)
         
         self._store()
-    
+
+    def profile_all_comm(
+            self,
+    ) -> None:
+        
+        # mp.set_start_method('spawn', force=True)
+
+        for tp_degree in self.configs.tp_degrees:
+            if tp_degree > torch.cuda.device_count():
+                break
+            launch(tp_degree, self.configs)
+
+        # if dist.is_initialized():
+        #     cleanup()
+            
+
     def _load(self) -> None:
         """ Load the collected profiling data from the specified path. """        
         if not os.path.exists(self._path):
@@ -213,9 +403,38 @@ class CriusOfflineDataManager:
             pickle.dump(self.data, f)
         logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
 
+    @overload
     @classmethod
     def get_query_key(
-        cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+        cls, 
+        op_type: str, 
+        batch_size: int, 
+        seq_len: int, 
+        left_op_hidden_dim: int, 
+        right_op_hidden_dim: int
+    ) -> str: ...  
+
+    @overload
+    @classmethod
+    def get_query_key(
+        cls, 
+        op_type: str, 
+        tp_degree: int, 
+        data_size: int
+    ) -> str: ...  
+    
+    @classmethod
+    def get_query_key(
+        cls, 
+        op_type: str, 
+        *args,
+        **kwargs
     ) -> str:
         """ Generate a unique query key for the GEMM operation. """
-        return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+        # return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+        if len(args) == 4:
+            batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim = args
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+        elif len(args) == 2:
+            tp_degree, data_size = args
+            return f"{op_type}_tp{tp_degree}_ds{data_size}"
