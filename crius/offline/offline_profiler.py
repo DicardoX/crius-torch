@@ -6,7 +6,7 @@
 
 import os
 from typing import (Any, Dict, List, Optional, Tuple, Union, Callable)
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pickle
 import gc
 
@@ -50,6 +50,13 @@ class OfflineProfileConfigs:
 
     gemm_right_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the right operand in GEMM operations. """
+
+    allreduce_op_type: Callable = torch.distributed.all_reduce
+
+    comm_data_sizes: List[int] = field(
+        default_factory=lambda: [32*1024*4096, ]
+    )
+    """ Communication data sizes. """
 
     dtype: torch.dtype = torch.float16
     """ Data type for profiling. Default is float16. """
@@ -110,9 +117,7 @@ class CriusOfflineDataManager:
         self.data = None
         self._load()
     
-    def profile_all_gemm(
-        self, 
-    ) -> None:
+    def profile_all_gemm(self) -> None:
         """ Profile all GEMM operators. """
         
         gemm_op_type = self.configs.gemm_op_type
@@ -185,6 +190,19 @@ class CriusOfflineDataManager:
                         self._write_one_entry(query_key, op_latency, None)
         
         self._store()
+    
+    def profile_all_allreduce(self) -> None:
+        """ Profile all All-Reduce operators. """
+
+        allreduce_op_type = self.configs.allreduce_op_type
+        comm_data_sizes = self.configs.comm_data_sizes
+        dtype = self.configs.dtype
+        num_warmup_steps = self.configs.num_warmup_steps
+        num_profile_steps = self.configs.num_profile_steps
+
+        # TODO(chunyu): Implementing offline all-reduce profiler...
+        raise NotImplementedError
+
     
     def _load(self) -> None:
         """ Load the collected profiling data from the specified path. """        
