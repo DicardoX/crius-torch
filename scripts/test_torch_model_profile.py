@@ -19,10 +19,13 @@ from crius.loader import (ModelLoader, ShadowModelLoader)
 from crius.core.profiler import CriusDistProfiler
 from crius.model_parallel.utils import ParallelismPlan
 
-# Megatron imports for tensor parallelism
+# Megatron imports for tensor parallelism and pipeline parallelism
 from megatron.core import parallel_state
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
 from megatron.core.model_parallel_config import ModelParallelConfig
+from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
+from megatron.core.transformer.module import MegatronModule
+from megatron.core.enums import ModelType
 
 
 class ToyLayer(nn.Module):
@@ -127,10 +130,138 @@ class ToyModelTP(nn.Module):
         return self.layer_norm(hidden_states)
 
 
+class ToyModelPP(MegatronModule):
+    def __init__(
+            self, hidden_size: int, num_layers: int, config: ModelParallelConfig, 
+            device: str, dtype: str = torch.float16, pre_process: bool = True, post_process: bool = True,
+    ) -> None:
+        super().__init__(config=config)
+        self.device = device
+        self.pre_process = pre_process
+        self.post_process = post_process
+        self.config = config
+        self.model_type = ModelType.encoder_or_decoder
+        pp_rank = parallel_state.get_pipeline_model_parallel_rank()
+        pp_world_size = parallel_state.get_pipeline_model_parallel_world_size()
+        
+        layers_per_stage = num_layers // pp_world_size
+        start_layer = pp_rank * layers_per_stage
+        end_layer = start_layer + layers_per_stage
+        
+        if pp_rank == pp_world_size - 1:
+            end_layer = num_layers
+            
+        self.start_layer = start_layer
+        self.end_layer = end_layer
+        self.num_layers_this_stage = end_layer - start_layer
+        
+        self.layers = nn.ModuleList([
+            ToyLayer(hidden_size, device, dtype) for _ in range(self.num_layers_this_stage)
+        ])
+        
+        if self.post_process:
+            self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
+        else:
+            self.layer_norm = None
+            
+        self.input_tensor = None
+        
+    def set_input_tensor(self, input_tensor):
+        self.input_tensor = input_tensor
+        
+    def _gemm_op(self, hidden_states: torch.Tensor, layer_index: int) -> torch.Tensor:
+        hidden_states = self.layers[layer_index](hidden_states)
+        return hidden_states
+
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        if parallel_state.is_pipeline_first_stage():
+            hidden_states = input_
+        else:
+            if self.input_tensor is not None:
+                if isinstance(self.input_tensor, list):
+                    hidden_states = self.input_tensor[0]
+                else:
+                    hidden_states = self.input_tensor
+            else:
+                raise RuntimeError("input_tensor is None for non-first pipeline stage")
+            
+        for i in range(self.num_layers_this_stage):
+            hidden_states = self._gemm_op(hidden_states, i)
+            
+        if self.post_process and self.layer_norm is not None:
+            hidden_states = self.layer_norm(hidden_states)
+            
+        return hidden_states
+
+
+class ToyModelTPPP(MegatronModule):
+    def __init__(
+            self, hidden_size: int, num_layers: int, config: ModelParallelConfig, 
+            device: str, dtype: str = torch.float16, pre_process: bool = True, post_process: bool = True,
+    ) -> None:
+        super().__init__(config=config)
+        self.device = device
+        self.pre_process = pre_process
+        self.post_process = post_process
+        self.config = config
+        self.model_type = ModelType.encoder_or_decoder
+        
+        pp_rank = parallel_state.get_pipeline_model_parallel_rank()
+        pp_world_size = parallel_state.get_pipeline_model_parallel_world_size()
+        
+        layers_per_stage = num_layers // pp_world_size
+        start_layer = pp_rank * layers_per_stage
+        end_layer = start_layer + layers_per_stage
+        
+        if pp_rank == pp_world_size - 1:
+            end_layer = num_layers
+            
+        self.start_layer = start_layer
+        self.end_layer = end_layer
+        self.num_layers_this_stage = end_layer - start_layer
+        
+        self.layers = nn.ModuleList([
+            ToyLayerTP(hidden_size, config, device, dtype) for _ in range(self.num_layers_this_stage)
+        ])
+        
+        if self.post_process:
+            self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
+        else:
+            self.layer_norm = None
+            
+        self.input_tensor = None
+        
+    def set_input_tensor(self, input_tensor):
+        self.input_tensor = input_tensor
+        
+    def _gemm_op(self, hidden_states: torch.Tensor, layer_index: int) -> torch.Tensor:
+        hidden_states = self.layers[layer_index](hidden_states)
+        return hidden_states
+
+    def forward(self, input_: torch.Tensor) -> torch.Tensor:
+        if parallel_state.is_pipeline_first_stage():
+            hidden_states = input_
+        else:
+            if self.input_tensor is not None:
+                if isinstance(self.input_tensor, list):
+                    hidden_states = self.input_tensor[0]
+                else:
+                    hidden_states = self.input_tensor
+            else:
+                raise RuntimeError("input_tensor is None for non-first pipeline stage")
+            
+        for i in range(self.num_layers_this_stage):
+            hidden_states = self._gemm_op(hidden_states, i)
+            
+        if self.post_process and self.layer_norm is not None:
+            hidden_states = self.layer_norm(hidden_states)
+            
+        return hidden_states
+
+
 def initialize_distributed_and_tp(tensor_parallel_size: int = 1):
     """Initialize distributed training and tensor parallelism."""
     
-    # Initialize PyTorch distributed
     if not dist.is_initialized():
         local_rank = int(os.environ.get('LOCAL_RANK', 0))
         world_size = int(os.environ.get('WORLD_SIZE', 1))
@@ -143,18 +274,46 @@ def initialize_distributed_and_tp(tensor_parallel_size: int = 1):
             rank=int(os.environ.get('RANK', 0))
         )
     
-    # Initialize Megatron model parallel
     if not parallel_state.model_parallel_is_initialized():
         parallel_state.initialize_model_parallel(
             tensor_model_parallel_size=tensor_parallel_size,
             pipeline_model_parallel_size=1,
         )
     
-    # Initialize CUDA RNG tracker for Megatron
     from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
     model_parallel_cuda_manual_seed(1234)
     
     return parallel_state.get_tensor_model_parallel_rank(), parallel_state.get_tensor_model_parallel_world_size()
+
+
+def initialize_distributed_and_pp(pipeline_parallel_size: int = 1, tensor_parallel_size: int = 1):
+    if not dist.is_initialized():
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(
+            backend='nccl',
+            init_method='env://',
+            world_size=world_size,
+            rank=int(os.environ.get('RANK', 0))
+        )
+    
+    
+    if not parallel_state.model_parallel_is_initialized():
+        parallel_state.initialize_model_parallel(
+            tensor_model_parallel_size=tensor_parallel_size,
+            pipeline_model_parallel_size=pipeline_parallel_size,
+        )
+    
+    
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+    model_parallel_cuda_manual_seed(1234)
+    
+    return (parallel_state.get_pipeline_model_parallel_rank(), 
+            parallel_state.get_pipeline_model_parallel_world_size(),
+            parallel_state.get_tensor_model_parallel_rank(), 
+            parallel_state.get_tensor_model_parallel_world_size())
 
 
 def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str) -> nn.Module:
@@ -165,6 +324,20 @@ def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str) -
 def model_provider_tp(hidden_size: int, num_layers: int, device: str, dtype: str, config: ModelParallelConfig) -> nn.Module:
     """ Tensor parallel model provider function. """
     return ToyModelTP(hidden_size, num_layers, config, device, dtype=dtype)
+
+
+def model_provider_pp(hidden_size: int, num_layers: int, device: str, dtype: str, config: ModelParallelConfig, 
+                      pre_process: bool = True, post_process: bool = True) -> nn.Module:
+    """ Pipeline parallel model provider function. """
+    return ToyModelPP(hidden_size, num_layers, config, device, dtype=dtype, 
+                      pre_process=pre_process, post_process=post_process)
+
+
+def model_provider_tp_pp(hidden_size: int, num_layers: int, device: str, dtype: str, config: ModelParallelConfig, 
+                         pre_process: bool = True, post_process: bool = True) -> nn.Module:
+    """ Tensor + Pipeline parallel model provider function. """
+    return ToyModelTPPP(hidden_size, num_layers, config, device, dtype=dtype, 
+                        pre_process=pre_process, post_process=post_process)
 
 
 class TorchModelProfileTest(unittest.TestCase):
@@ -214,7 +387,7 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cuda"
         enable_torch_profiler = False
 
-        # Model
+        
         # _model_loader_class = ModelLoader
         _model_loader_class = ShadowModelLoader
         model_loader = _model_loader_class(
@@ -230,13 +403,13 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         model = model_loader.load()
         
-        # Inputs
+        
         data = [
             torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
                 for _ in range(num_micro_batches)
         ]
 
-        # Parallelism plan
+        
         # TODO(chunyu): Currently we manually specify the mappings
         op_to_layer_mapping = {
             'L__self___layers_0_fc1': 0,
@@ -468,99 +641,219 @@ class TorchModelProfileTest(unittest.TestCase):
             dist.destroy_process_group()
 
     # @unittest.skip("Pass.")
-    def test_torch_model_hybrid_parallel_profiling(self):
-        """ Profile a hybrid parallel torch model using both TP and DP. """
+    def test_torch_model_pipeline_parallel_profiling(self):
         
-        # Parse environment variables for hybrid parallelism
+        pipeline_parallel_size = int(os.environ.get('WORLD_SIZE', 2))  # Default to 2 for PP
+        pp_rank, pp_world_size, tp_rank, tp_world_size = initialize_distributed_and_pp(
+            pipeline_parallel_size=pipeline_parallel_size, tensor_parallel_size=1
+        )
+        
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 4
+        hidden_size = 4096
+        num_layers = 8
+        dtype = torch.float16
+        device = f"cuda:{torch.cuda.current_device()}"
+        
+        config = ModelParallelConfig(
+            tensor_model_parallel_size=tp_world_size,
+            pipeline_model_parallel_size=pp_world_size,
+            pipeline_dtype=dtype,
+        )
+        config.hidden_size = hidden_size
+        config.fp8 = None
+        config.sequence_parallel = False
+        
+        print(f"[PP Rank {pp_rank}] Initializing pipeline parallel model with PP size: {pp_world_size}")
+        
+        pre_process = (pp_rank == 0)
+        post_process = (pp_rank == pp_world_size - 1)
+        
+        model = model_provider_pp(hidden_size, num_layers, device, dtype, config, 
+                                  pre_process=pre_process, post_process=post_process)
+        
+        print(f"[PP Rank {pp_rank}] Model created with layers {model.start_layer}-{model.end_layer-1}")
+        
+        def forward_step_func(data_iterator, model):
+            data = next(data_iterator)
+            output = model(data)
+            
+            def loss_func(output_tensor):
+                if parallel_state.is_pipeline_last_stage():
+                    target = torch.zeros_like(output_tensor)
+                    loss = torch.nn.functional.mse_loss(output_tensor, target)
+                    return loss, {'loss': loss}
+                else:
+                    return output_tensor, {}
+                    
+            return output, loss_func
+        
+        torch.manual_seed(1234)  # Ensure same input across ranks
+        data_list = [
+            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
+            for _ in range(num_micro_batches)
+        ]
+        data_iterator = iter(data_list)
+        
+        forward_backward_func = get_forward_backward_func()
+        
+        # Warmup
+        print(f"[PP Rank {pp_rank}] Starting warmup...")
+        for _ in range(5):
+            data_iterator = iter(data_list)
+            losses = forward_backward_func(
+                forward_step_func=forward_step_func,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_micro_batches,
+                seq_length=seq_len,
+                micro_batch_size=global_bs // num_micro_batches,
+                forward_only=True,
+            )
+        torch.cuda.synchronize(device)
+        
+        print(f"[PP Rank {pp_rank}] Starting measurement...")
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+        
+        start_event.record()
+        for _ in range(10):
+            data_iterator = iter(data_list)
+            losses = forward_backward_func(
+                forward_step_func=forward_step_func,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_micro_batches,
+                seq_length=seq_len,
+                micro_batch_size=global_bs // num_micro_batches,
+                forward_only=True,
+            )
+        end_event.record()    
+        
+        end_event.synchronize()
+        total_time_ms = start_event.elapsed_time(end_event)
+        avg_latency_ms = total_time_ms / 10
+        
+        if pp_rank == 0:
+            print(f"========> Pipeline Parallel (PP={pp_world_size}) end-to-end latency: {avg_latency_ms:.3f} ms")
+            print(f"========> Number of microbatches: {num_micro_batches}")
+            print(f"========> Layers per stage: {num_layers // pp_world_size}")
+        
+        # Cleanup
+        parallel_state.destroy_model_parallel()
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
+    # @unittest.skip("Pass.")
+    def test_torch_model_hybrid_tp_pp_profiling(self):
+        """ Profile a hybrid parallel torch model using both TP and PP. """
         world_size = int(os.environ.get('WORLD_SIZE', 4))
         rank = int(os.environ.get('RANK', 0))
         local_rank = int(os.environ.get('LOCAL_RANK', 0))
         
-        # For hybrid parallelism: assume world_size = tp_size * dp_size
         tensor_parallel_size = 2  # TP size
-        data_parallel_size = world_size // tensor_parallel_size  # DP size
+        pipeline_parallel_size = world_size // tensor_parallel_size  # PP size
         
         assert world_size % tensor_parallel_size == 0, f"World size {world_size} must be divisible by TP size {tensor_parallel_size}"
         
-        # Initialize distributed
-        torch.cuda.set_device(local_rank)
-        if not dist.is_initialized():
-            dist.init_process_group(
-                backend='nccl',
-                init_method='env://',
-                world_size=world_size,
-                rank=rank
-            )
-        
-        # Initialize Megatron model parallel with custom DP groups
-        if not parallel_state.model_parallel_is_initialized():
-            parallel_state.initialize_model_parallel(
-                tensor_model_parallel_size=tensor_parallel_size,
-                pipeline_model_parallel_size=1,
-            )
-            # Initialize CUDA RNG tracker for Megatron
-            from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
-            model_parallel_cuda_manual_seed(1234)
-        
-        tp_rank = parallel_state.get_tensor_model_parallel_rank()
-        tp_world_size = parallel_state.get_tensor_model_parallel_world_size()
-        
-        # Calculate DP rank and group
-        dp_rank = rank // tensor_parallel_size
+        pp_rank, pp_world_size, tp_rank, tp_world_size = initialize_distributed_and_pp(
+            pipeline_parallel_size=pipeline_parallel_size, 
+            tensor_parallel_size=tensor_parallel_size
+        )
         
         global_bs = 8
         seq_len = 2048
+        num_micro_batches = 4
         hidden_size = 4096
-        num_layers = 4
+        num_layers = 8
         dtype = torch.float16
         device = f"cuda:{local_rank}"
         
-        print(f"[Global Rank {rank}] Hybrid Parallel: TP_rank={tp_rank}/{tp_world_size}, DP_rank={dp_rank}/{data_parallel_size}")
+        print(f"[Global Rank {rank}] Hybrid TP+PP: PP_rank={pp_rank}/{pp_world_size}, TP_rank={tp_rank}/{tp_world_size}")
         
-        # Create ModelParallelConfig for Megatron
         config = ModelParallelConfig(
             tensor_model_parallel_size=tp_world_size,
-            pipeline_model_parallel_size=1,
+            pipeline_model_parallel_size=pp_world_size,
+            pipeline_dtype=dtype,
         )
+        config.hidden_size = hidden_size
+        config.fp8 = None
+        config.sequence_parallel = False
         
-        # Create tensor parallel model
-        model = model_provider_tp(hidden_size, num_layers, device, dtype, config)
+        pre_process = (pp_rank == 0)
+        post_process = (pp_rank == pp_world_size - 1)
         
-        # Each DP group gets a different portion of the global batch
-        local_batch_size = global_bs // data_parallel_size
-        torch.manual_seed(1234 + dp_rank)  # Different seed per DP rank
-        data = [
-            torch.randn(local_batch_size, seq_len, hidden_size, dtype=dtype, device=device)
+        model = model_provider_tp_pp(hidden_size, num_layers, device, dtype, config, 
+                                     pre_process=pre_process, post_process=post_process)
+        
+        print(f"[Global Rank {rank}] Model created with layers {model.start_layer}-{model.end_layer-1}")
+        
+        def forward_step_func(data_iterator, model):
+            data = next(data_iterator)
+            output = model(data)
+            
+            def loss_func(output_tensor):
+                if parallel_state.is_pipeline_last_stage():
+                    target = torch.zeros_like(output_tensor)
+                    loss = torch.nn.functional.mse_loss(output_tensor, target)
+                    return loss, {'loss': loss}
+                else:
+                    return output_tensor, {}
+                    
+            return output, loss_func
+        
+        torch.manual_seed(1234)  # Ensure same input across ranks
+        data_list = [
+            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
+            for _ in range(num_micro_batches)
         ]
+        
+        forward_backward_func = get_forward_backward_func()
         
         # Warmup
         print(f"[Global Rank {rank}] Starting warmup...")
-        for _ in range(10):
-            with torch.no_grad():
-                _ = model(data[0])
+        for _ in range(5):
+            data_iterator = iter(data_list)
+            losses = forward_backward_func(
+                forward_step_func=forward_step_func,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_micro_batches,
+                seq_length=seq_len,
+                micro_batch_size=global_bs // num_micro_batches,
+                forward_only=True,
+            )
         torch.cuda.synchronize(device)
         
-        # Measure hybrid parallel performance
         print(f"[Global Rank {rank}] Starting measurement...")
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)  
         
         start_event.record()
-        for _ in range(100):
-            with torch.no_grad():
-                output = model(data[0])
+        for _ in range(10):
+            data_iterator = iter(data_list)
+            losses = forward_backward_func(
+                forward_step_func=forward_step_func,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_micro_batches,
+                seq_length=seq_len,
+                micro_batch_size=global_bs // num_micro_batches,
+                forward_only=True,
+            )
         end_event.record()    
         
         end_event.synchronize()
         total_time_ms = start_event.elapsed_time(end_event)
-        avg_latency_ms = total_time_ms / 100
+        avg_latency_ms = total_time_ms / 10
         
         if rank == 0:
-            print(f"========> Hybrid Parallel (TP={tensor_parallel_size}, DP={data_parallel_size}) end-to-end latency: {avg_latency_ms:.3f} ms")
-            print(f"========> Local batch size per DP rank: {local_batch_size}")
-            print(f"========> Output shape: {output.shape}")
+            print(f"========> Hybrid Parallel (TP={tensor_parallel_size}, PP={pipeline_parallel_size}) end-to-end latency: {avg_latency_ms:.3f} ms")
+            print(f"========> Number of microbatches: {num_micro_batches}")
+            print(f"========> Layers per PP stage: {num_layers // pipeline_parallel_size}")
+            print(f"========> TP degree per stage: {tensor_parallel_size}")
         
-        # Cleanup
         parallel_state.destroy_model_parallel()
         if dist.is_initialized():
             dist.destroy_process_group()
@@ -570,7 +863,15 @@ if __name__ == '__main__':
     unittest.main()
 
 """
+# Tensor Parallel (TP)
 conda activate crius && cd /app && torchrun --nproc-per-node=2 scripts/test_torch_model_profile.py TorchModelProfileTest.test_torch_model_tensor_parallel_profiling
+
+# Data Parallel (DP)
 conda activate crius && cd /app && torchrun --nproc-per-node=2 scripts/test_torch_model_profile.py TorchModelProfileTest.test_torch_model_data_parallel_profiling
-conda activate crius && cd /app && torchrun --nproc-per-node=4 scripts/test_torch_model_profile.py TorchModelProfileTest.test_torch_model_hybrid_parallel_profiling
+
+# Pipeline Parallel (PP)
+conda activate crius && cd /app && torchrun --nproc-per-node=2 scripts/test_torch_model_profile.py TorchModelProfileTest.test_torch_model_pipeline_parallel_profiling
+
+# Hybrid TP + PP
+conda activate crius && cd /app && torchrun --nproc-per-node=4 scripts/test_torch_model_profile.py TorchModelProfileTest.test_torch_model_hybrid_tp_pp_profiling
 """
