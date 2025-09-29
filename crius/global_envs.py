@@ -4,8 +4,8 @@
 
 """ Global environmental configurations. """
 
-from typing import (Tuple)
-from dataclasses import dataclass
+from typing import (Tuple, Dict, Any, List)
+from dataclasses import dataclass, field
 from collections import OrderedDict
 import logging
 
@@ -41,6 +41,30 @@ class GlobalEnvConfigs:
 
     pipeline_model_parallel_size: int = 1
     """ Inter-layer model parallelism. Splits transformer layers across GPU ranks. """
+
+    ###################
+    # Compile Options #
+    ###################
+    comm_op_insert_rules: Dict[str, Any] = None
+    """ Rules for inserting communication operators into the computation graph. 
+    The rules are case-specific and should be customized by engineers. 
+    
+    Format:
+    {
+        "all_reduce": {
+            "after_nodes": ['fc2', ],   # Insert all-reduce after nodes with keywords 'fc2'
+        },
+        ...
+    }
+    """
+
+    #################
+    # Communication #
+    #################
+    supported_comm_primitives: List[str] = field(
+        default_factory=lambda: ["all_reduce", "all_gather", "reduce_scatter", "all_to_all"]
+    )
+    """ Supported communication primitives. """
 
 
 global_configs = GlobalEnvConfigs()

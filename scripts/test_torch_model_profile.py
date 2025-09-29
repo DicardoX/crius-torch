@@ -17,6 +17,7 @@ from torch import nn
 from crius.loader import (ModelLoader, ShadowModelLoader)
 from crius.core.profiler import CriusDistProfiler
 from crius.model_parallel.utils import ParallelismPlan
+from crius.global_envs import global_configs
 
 
 class ToyLayer(nn.Module):
@@ -227,6 +228,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         from megatron.core.transformer.transformer_config import TransformerConfig
         from megatron.core.transformer.module import MegatronModule
+        from megatron.core import mpu
 
         from crius.train_backend.megatron.utils import initialize_distributed
 
@@ -240,7 +242,9 @@ class TorchModelProfileTest(unittest.TestCase):
             
             def forward(self, x: torch.Tensor) -> torch.Tensor:
                 x = self.fc1(x)
-                return self.fc2(x)
+                x = self.fc2(x)
+                torch.distributed.all_reduce(x, group=mpu.get_tensor_model_parallel_group())
+                return x
 
         class MegatronToyModel(MegatronModule):
             """ Toy Megatron model. """
@@ -262,7 +266,7 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype)
 
-        
+
         global_bs = 8
         seq_len = 2048
         num_micro_batches = 2
@@ -272,7 +276,7 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cuda"
 
         initialize_distributed(
-            tensor_model_parallel_size=1,
+            tensor_model_parallel_size=2,
             pipeline_model_parallel_size=1,
         )
 
@@ -317,11 +321,19 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_type="1f1b",
             pipeline_parallel_degree=1,
             num_microbatches=num_micro_batches,
-            tensor_parallel_degree=1,
+            tensor_parallel_degree=2,
             data_parallel_degree=1,
             op_to_layer_mapping=op_to_layer_mapping,
             layer_to_stage_mapping=layer_to_stage_mapping,
         )
+
+        # We manually set the communication op insertion rules for 
+        global_configs.comm_op_insert_rules = {
+            "all_reduce": {
+                "after_nodes": ['fc2', ],
+            },
+        }
+
         # Profile
         profiler = CriusDistProfiler(
             profiled_data_path='./crius/offline/prof_data.pkl',
@@ -334,6 +346,43 @@ class TorchModelProfileTest(unittest.TestCase):
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+
+        ################# Real profiling #################
+        _model_loader_class = ModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+                "dtype": dtype,
+            },
+            device_str=device,
+        )
+        model = model_loader.load()
+
+        # Warmup
+        for _ in range(100):
+            with torch.no_grad():
+                _ = model(data[0])
+        torch.cuda.synchronize(device)
+    
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+        # Measure
+        start_event.record()
+        for _ in range(1000):
+            with torch.no_grad():
+                _ = model(data[0])
+        end_event.record()    
+
+        end_event.synchronize()
+        total_time_ms = start_event.elapsed_time(end_event)
+        avg_latency_ms = total_time_ms / 1000     
+        stage_latencies_ms = [avg_latency_ms]
+        measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        
+        print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
 
 if __name__ == '__main__':

@@ -79,8 +79,6 @@ class CriusDistProfiler:
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
 
-        print(stage_latencies)
-
         # Step 4. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
             stage_latencies, parallelism_plan, only_forward,
@@ -91,7 +89,7 @@ class CriusDistProfiler:
         """ Query operator latencies(ms) from offline profiled data. """
 
         for node in graph.nodes:
-            if node.op == "call_module":
+            if str(node.op) in ("call_module", "call_function", "call_method"):
                 node_latency = 0.0
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
@@ -107,6 +105,7 @@ class CriusDistProfiler:
                 
                 setattr(node, "latency", node_latency)
             else:
+                # Non dominant nodes
                 setattr(node, "latency", None)
 
         return graph

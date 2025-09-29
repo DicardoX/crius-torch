@@ -13,6 +13,7 @@ import torch._dynamo as dynamo
 
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
+from crius.global_envs import global_configs, logger
 
 __all__ = [
     "transform_to_ir_graph",
@@ -82,15 +83,26 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
         if hasattr(node, 'layer_type'):
             continue
         
-        # GEMM
         if node.op == 'call_module':
             if (
                 # ------------- String matching rules -------------
-                'fc' in node.target
+                'fc' in str(node.target)
             ):
                 setattr(node, 'layer_type', 'gemm')
             else:
-                setattr(node, 'layer_type', 'unknown')
+                setattr(node, 'layer_type', 'unknown_call_module')
+        
+        elif node.op == 'call_function':
+            if (
+                # ------------- String matching rules -------------
+                'all_reduce' in str(node.target)
+            ):
+                setattr(node, 'layer_type', 'all_reduce')
+            else:
+                setattr(node, 'layer_type', 'unknown_call_function')
+        
+        else:
+            setattr(node, 'layer_type', 'unknown_others')
 
     return graph
 
@@ -105,5 +117,51 @@ def insert_comm_primitives_into_graph(
         graph: IR graph to be inserted with communication primitives.
         parallelism_plan: How the to-be-compiled model would be parallelized.
     """
-    # TODO(chunyu): Implement this function.
+
+    if (
+        parallelism_plan is None or
+        (
+            parallelism_plan.pipeline_parallel_degree == 1 and
+            parallelism_plan.tensor_parallel_degree == 1
+        )
+    ):
+        return graph    # No insertion needed
+    
+    return _insert_comm_primitives_into_graph_impl(graph)
+
+
+def _insert_comm_primitives_into_graph_impl(graph: IRGraph) -> IRGraph:
+    """ Case-specific implementation for communication primitive insertion. 
+    
+    NOTE: Engineers should customize the `global_configs.comm_op_insert_rules`.
+    """
+
+    comm_op_insert_rules = global_configs.comm_op_insert_rules
+    if comm_op_insert_rules is None:
+        logger.warning("No communication operator insertion rules are specified in `global_configs`.")
+        return graph
+    
+    for comm_primitive_str in comm_op_insert_rules.keys():
+        if comm_primitive_str not in global_configs.supported_comm_primitives:
+            logger.warning(f"Unsupported communication primitive `{comm_primitive_str}`.")
+            continue
+        
+        # Traverse the node to insert
+        after_nodes = comm_op_insert_rules[comm_primitive_str].get("after_nodes", [])
+        for node in graph.nodes:
+            for after_node_keyword in after_nodes:
+                if after_node_keyword not in str(node.target):
+                    continue
+                
+                # Check whether the graph already has the comm op node
+                if comm_primitive_str in str(node.next.target):
+                    logger.info(f"=======> Node `{str(node.next.target)}` already exists after node `{str(node.target)}`, skip insertion.")
+                    continue
+                
+                # TODO(chunyu): When manually inserting communication nodes, we may:
+                # 1. Construct a communication node;
+                # 2. Determine its input shape based on its prev node's output shape;
+                # 3. Maybe need to change shapes of next nodes (e.g., when comm primitive is all-gather);
+                raise NotImplementedError("Implement customized communication node insertion here.")
+
     return graph
