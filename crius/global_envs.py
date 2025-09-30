@@ -53,6 +53,7 @@ class GlobalEnvConfigs:
     {
         "all_reduce": {
             "after_nodes": ['fc2', ],   # Insert all-reduce after nodes with keywords 'fc2'
+            "interval": 1,              # Interval to insert, 1 means inserting every `after_node`
         },
         ...
     }

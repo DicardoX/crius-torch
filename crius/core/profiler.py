@@ -89,11 +89,17 @@ class CriusDistProfiler:
         """ Query operator latencies(ms) from offline profiled data. """
 
         for node in graph.nodes:
-            if str(node.op) in ("call_module", "call_function", "call_method"):
+            if (
+                str(node.op) in ("call_module", "call_function", "call_method") and
+                "unknown" not in node.layer_type
+            ):
                 node_latency = 0.0
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
                     input_shapes, output_shapes = node.input_shapes, node.output_shapes
+
+                    print("\n\n", node.layer_type, input_shapes, output_shapes)
+
                     query_key = CriusOfflineDataManager.get_query_key(
                         op_type=node.layer_type, batch_size=input_shapes[0][0], seq_len=input_shapes[0][1],
                         left_op_hidden_dim=input_shapes[0][2], right_op_hidden_dim=output_shapes[0][2],

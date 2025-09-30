@@ -3,7 +3,7 @@
 # Author: Chunyu Xue
 
 import os
-from typing import Dict, Set
+from typing import Dict, Set, Any
 import unittest
 import logging
 from functools import partial
@@ -226,11 +226,14 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 
-        from megatron.core.transformer.transformer_config import TransformerConfig
+        from megatron.core.model_parallel_config import ModelParallelConfig
         from megatron.core.transformer.module import MegatronModule
         from megatron.core import mpu
+        # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
+        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
         from crius.train_backend.megatron.utils import initialize_distributed
+        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
 
         class MegatronToyLayer(MegatronModule):
             # TODO(chunyu): Replace nn.Linear with Megatron's tensor parallelized linear layer.
@@ -245,15 +248,52 @@ class TorchModelProfileTest(unittest.TestCase):
                 x = self.fc2(x)
                 torch.distributed.all_reduce(x, group=mpu.get_tensor_model_parallel_group())
                 return x
+        
+        class ToyLayerTP(nn.Module):
+            """Tensor parallel version of ToyLayer using Megatron's ColumnParallelLinear and RowParallelLinear."""
+            
+            def __init__(
+                self, hidden_size: int, config: ModelParallelConfig, device: str, dtype: str = torch.float16,
+            ) -> None:
+                super().__init__()
+                self.dtype = dtype
+                # Column parallel: split along output dimension
+                self.fc1 = ColumnParallelLinear(
+                    input_size=hidden_size,
+                    output_size=hidden_size,
+                    tp_size=config.tensor_model_parallel_size,
+                    bias=False,
+                    device=device,
+                    dtype=dtype,
+                )
+                # Row parallel: split along input dimension, gather output
+                self.fc2 = RowParallelLinear(
+                    input_size=hidden_size,
+                    output_size=hidden_size,
+                    tp_size=config.tensor_model_parallel_size,
+                    bias=False,
+                    device=device,
+                    dtype=dtype,
+                )
+                
+                # Ensure weights are in the correct dtype and device
+                self.fc1.weight.data = self.fc1.weight.data.to(dtype=dtype, device=device)
+                self.fc2.weight.data = self.fc2.weight.data.to(dtype=dtype, device=device)
+            
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                x, _ = self.fc1(x)
+                x, _ = self.fc2(x)
+                return x
 
         class MegatronToyModel(MegatronModule):
             """ Toy Megatron model. """
 
-            def __init__(self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16) -> None:
+            def __init__(self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16, megatron_configs: Any = None) -> None:
                 super().__init__(config=None)
                 self.device = device
                 self.num_layers = num_layers
-                self.layers = nn.ModuleList([MegatronToyLayer(hidden_size, device, dtype) for _ in range(num_layers)])
+                # self.layers = nn.ModuleList([MegatronToyLayer(hidden_size, device, dtype) for _ in range(num_layers)])
+                self.layers = nn.ModuleList([ToyLayerTP(hidden_size, megatron_configs, device, dtype) for _ in range(num_layers)])
                 self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
 
             def forward(self, input_: torch.Tensor) -> torch.Tensor:
@@ -262,9 +302,9 @@ class TorchModelProfileTest(unittest.TestCase):
                     hidden_states = self.layers[i](hidden_states)
                 return self.layer_norm(hidden_states)
             
-        def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str) -> nn.Module:
+        def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str, megatron_configs: Any = None) -> nn.Module:
             """ Model provider function. """
-            return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype)
+            return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_configs=megatron_configs)
 
 
         global_bs = 8
@@ -279,11 +319,17 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_model_parallel_size=2,
             pipeline_model_parallel_size=1,
         )
+        model_parallel_cuda_manual_seed(1234)
 
-        # transformer_config = TransformerConfig()
+        # Create ModelParallelConfig for Megatron
+        megatron_configs = ModelParallelConfig(
+            tensor_model_parallel_size=2,
+            pipeline_model_parallel_size=1,
+        )
 
         # Model
-        _model_loader_class = ShadowModelLoader
+        # _model_loader_class = ShadowModelLoader
+        _model_loader_class = ModelLoader
         model_loader = _model_loader_class(
             model_provider=model_provider,
             model_kwargs={
@@ -291,9 +337,10 @@ class TorchModelProfileTest(unittest.TestCase):
                 "num_layers": num_layers,
                 "device": device,
                 "dtype": dtype,
+                "megatron_configs": megatron_configs,
             },
-            # device_str=device,
-            fake_device_str=device,
+            device_str=device,
+            # fake_device_str=device,
         )
         model = model_loader.load()
         
@@ -330,7 +377,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # We manually set the communication op insertion rules for 
         global_configs.comm_op_insert_rules = {
             "all_reduce": {
-                "after_nodes": ['fc2', ],
+                # "after_nodes": ['fc2', ],
+                # "after_nodes": ['matmul', ],
+                "after_nodes": ['contiguous', ],
+                "interval": 1,
             },
         }
 
@@ -356,6 +406,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "num_layers": num_layers,
                 "device": device,
                 "dtype": dtype,
+                "megatron_configs": megatron_configs,
             },
             device_str=device,
         )
@@ -374,7 +425,7 @@ class TorchModelProfileTest(unittest.TestCase):
         for _ in range(1000):
             with torch.no_grad():
                 _ = model(data[0])
-        end_event.record()    
+        end_event.record()
 
         end_event.synchronize()
         total_time_ms = start_event.elapsed_time(end_event)

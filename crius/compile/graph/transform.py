@@ -98,6 +98,11 @@ def infer_node_layer_types(graph: IRGraph) -> IRGraph:
                 'all_reduce' in str(node.target)
             ):
                 setattr(node, 'layer_type', 'all_reduce')
+            elif (
+                # ------------- String matching rules -------------
+                'matmul' in str(node.target)
+            ):
+                setattr(node, 'layer_type', 'gemm')
             else:
                 setattr(node, 'layer_type', 'unknown_call_function')
         
@@ -148,11 +153,17 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph) -> IRGraph:
         
         # Traverse the node to insert
         after_nodes = comm_op_insert_rules[comm_primitive_str].get("after_nodes", [])
+        interval = comm_op_insert_rules[comm_primitive_str].get("interval", 1)
+        after_node_num = 0
         for node in graph.nodes:
             for after_node_keyword in after_nodes:
                 if after_node_keyword not in str(node.target):
                     continue
-                
+
+                after_node_num += 1
+                if after_node_num % interval != 0:
+                    continue    # Should not insert here
+
                 # Check whether the graph already has the comm op node
                 if comm_primitive_str in str(node.next.target):
                     logger.info(f"=======> Node `{str(node.next.target)}` already exists after node `{str(node.target)}`, skip insertion.")
