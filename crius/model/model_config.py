@@ -13,5 +13,6 @@ model_config = SimpleNamespace(
     gloa1_bs=None,
     model_path=None,
     top_k=None,
+    num_expert=None,
     if_moe=None,
 )

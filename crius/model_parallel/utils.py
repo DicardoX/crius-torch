@@ -31,6 +31,12 @@ class ParallelismPlan:
     data_parallel_degree: int = 1
     """ Degree of data parallelism. """
 
+    expert_parallel_degree: int = 1
+
+    sp_parallel_degree: int = 1
+
+    context_parallel_degree: int = 1
+
     op_to_layer_mapping: Dict[str, int] = None
     """ Mapping from operator name to layer index.
     `{"fc1": 0, "fc2": 1}` means `fc1` is in layer 0 and `fc2` is in layer 1"""
