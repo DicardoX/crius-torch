@@ -5,7 +5,7 @@
 """ Graph transformation. """
 
 import os
-from typing import (List, Callable, Any, Optional, Union)
+from typing import (List, Callable, Any, Optional, Union, Tuple)
 
 import torch
 from torch import nn
@@ -25,18 +25,32 @@ __all__ = [
 
 def transform_to_ir_graph(
     model: nn.Module,
+    forward_backward_pass: Callable,
     *input_args,
-) -> Any:
-    """ Transform model into IR graph. """
-    # Trace with Python-level JIT compiler
-    fx_module = dynamo.export(model)(*input_args)[0]
-    fx_graph = fx_module.graph
-    # Construct IR graph
-    graph = IRGraph(fx_graph.owning_module)
-    output_vals = graph.graph_copy(fx_graph, val_map={}, return_output_node=True)
-    output_val, old_output_node = output_vals
-    graph.output(output_val, type_expr=getattr(old_output_node, "type", None))   # Insert output node
-    return graph
+) -> Tuple[IRGraph, Optional[IRGraph]]:
+    """ Transform model into IR graph, tracing with Python-level JIT compiler. 
+    
+    Args:
+        model: Torch-like model to be compiled.
+        forward_backward_pass: Forward-backward pass function, set to `None` for forward-only case.
+        input_args: Model input arguments.
+    """
+
+    graph, bw_graph = None, None
+    if not global_configs.enable_backward_graph_generation:
+        # Forward-only
+        fx_module = dynamo.export(model)(*input_args)[0]
+        fx_graph = fx_module.graph
+        # Construct IR graph
+        graph = IRGraph(fx_graph.owning_module)
+        output_vals = graph.graph_copy(fx_graph, val_map={}, return_output_node=True)
+        output_val, old_output_node = output_vals
+        graph.output(output_val, type_expr=getattr(old_output_node, "type", None))   # Insert output node
+    else:
+        # Forward-backward
+        assert forward_backward_pass is not None
+
+    return graph, bw_graph
 
 
 def propagate_node_shapes(graph: IRGraph, *input_args) -> IRGraph:
@@ -147,14 +161,22 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph) -> IRGraph:
         return graph
     
     for comm_primitive_str in comm_op_insert_rules.keys():
-        if comm_primitive_str not in global_configs.supported_comm_primitives:
-            logger.warning(f"Unsupported communication primitive `{comm_primitive_str}`.")
+        comm_primitive = comm_primitive_str.split(":")[0]   # Remove parallelism suffix
+        if comm_primitive not in global_configs.supported_comm_primitives:
+            logger.warning(f"Unsupported communication primitive `{comm_primitive}`.")
             continue
         
         # Traverse the node to insert
         after_nodes = comm_op_insert_rules[comm_primitive_str].get("after_nodes", [])
         interval = comm_op_insert_rules[comm_primitive_str].get("interval", 1)
+        node_pass = comm_op_insert_rules[comm_primitive_str].get("pass", "forward")
+        node_parallelism = comm_op_insert_rules[comm_primitive_str].get("parallelism", "tp")
         after_node_num = 0
+
+        if node_pass != "forward":
+            # This node should be inserted in backward graph
+            continue
+        
         for node in graph.nodes:
             for after_node_keyword in after_nodes:
                 if after_node_keyword not in str(node.target):
@@ -165,8 +187,10 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph) -> IRGraph:
                     continue    # Should not insert here
 
                 # Check whether the graph already has the comm op node
-                if comm_primitive_str in str(node.next.target):
+                if comm_primitive in str(node.next.target):
                     logger.info(f"=======> Node `{str(node.next.target)}` already exists after node `{str(node.target)}`, skip insertion.")
+                    setattr(node.next, "node_pass", node_pass)
+                    setattr(node.next, "node_parallelism", node_parallelism)
                     continue
                 
                 # TODO(chunyu): When manually inserting communication nodes, we may:
@@ -174,5 +198,6 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph) -> IRGraph:
                 # 2. Determine its input shape based on its prev node's output shape;
                 # 3. Maybe need to change shapes of next nodes (e.g., when comm primitive is all-gather);
                 raise NotImplementedError("Implement customized communication node insertion here.")
-
+    
     return graph
+

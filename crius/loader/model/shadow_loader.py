@@ -11,6 +11,7 @@ from torch import nn
 from torch._subclasses import FakeTensorMode
 
 from crius.loader.model.loader import BaseModelLoader
+from crius.global_envs import global_configs
 
 __all__ = [
     "ShadowModelLoader",
@@ -43,5 +44,19 @@ class ShadowModelLoader(BaseModelLoader):
             for param in model.parameters():
                 assert isinstance(param, torch._subclasses.FakeTensor), \
                     f"Parameter {param.__class__} is not a FakeTensor."
+                
+            if global_configs.training_backend == "megatron":
+                from megatron.core.utils import get_model_config
+                from megatron.core.distributed import DistributedDataParallelConfig
+                from megatron.core.distributed import DistributedDataParallel as DDP
             
+                # Wrap with torch ddp module
+                config=get_model_config(model)
+                ddp_config = DistributedDataParallelConfig()
+                model = DDP(
+                    config=config,
+                    ddp_config=ddp_config,
+                    module=model,
+                )
+
             return model

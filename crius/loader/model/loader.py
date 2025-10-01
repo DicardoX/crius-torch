@@ -9,6 +9,8 @@ from typing import (Optional, Callable, Dict, Any)
 import torch
 from torch import nn
 
+from crius.global_envs import global_configs
+
 __all__ = [
     "BaseModelLoader",
     "ModelLoader",
@@ -49,4 +51,19 @@ class ModelLoader(BaseModelLoader):
         assert isinstance(model, nn.Module) or model is None
         if model:
             model.to(self.device_str)
+        
+        if global_configs.training_backend == "megatron":
+            from megatron.core.utils import get_model_config
+            from megatron.core.distributed import DistributedDataParallelConfig
+            from megatron.core.distributed import DistributedDataParallel as DDP
+        
+            # Wrap with torch ddp module
+            config=get_model_config(model)
+            ddp_config = DistributedDataParallelConfig()
+            model = DDP(
+                config=config,
+                ddp_config=ddp_config,
+                module=model,
+            )
+
         return model

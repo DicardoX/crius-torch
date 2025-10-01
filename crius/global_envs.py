@@ -33,11 +33,17 @@ class GlobalEnvConfigs:
     configurations. Thus, runtime modified configurations should be boardcasted among all ranks.
     """
 
+    training_backend: str = "megatron"
+    """ Training backend used for model training. Options: ['megatron', ] """
+
     #####################
     # Model Parallelism #
     #####################
     tensor_model_parallel_size: int = 1
     """ Intra-layer model parallelism. Splits tensors across GPU ranks. """
+
+    data_parallel_size: int = 1 
+    """ Data parallelism (Torch DDP). Perform gradient sync after backward. """
 
     pipeline_model_parallel_size: int = 1
     """ Inter-layer model parallelism. Splits transformer layers across GPU ranks. """
@@ -51,19 +57,27 @@ class GlobalEnvConfigs:
     
     Format:
     {
-        "all_reduce": {
+        "all_reduce:tp": {
             "after_nodes": ['fc2', ],   # Insert all-reduce after nodes with keywords 'fc2'
             "interval": 1,              # Interval to insert, 1 means inserting every `after_node`
+            "pass": 'forward',          # Which pass is this communication operator inserted ('backward' for DP)
+            "parallelism": 'tp',        # Which parallelism does this communication operator belong to
         },
         ...
     }
+    """
+
+    enable_backward_graph_generation: bool = False
+    """ Generate backward IR graph with only GEMM and communication operators. 
+    
+    If false, will direct estimate backward stage latency as twice that of forward one (might be inaccurate).
     """
 
     #################
     # Communication #
     #################
     supported_comm_primitives: List[str] = field(
-        default_factory=lambda: ["all_reduce", "all_gather", "reduce_scatter", "all_to_all"]
+        default_factory=lambda: ["all_reduce", "all_gather", "reduce_scatter", "all_to_all", ]
     )
     """ Supported communication primitives. """
 

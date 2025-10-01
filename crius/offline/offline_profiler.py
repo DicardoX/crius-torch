@@ -43,6 +43,7 @@ class OfflineProfileConfigs:
     seq_len_step: Union[int, str] = "power-of-2"
     """ Step size to increment sequence length during profiling. """
 
+    # GEMM
     gemm_op_type: Callable = torch.matmul
 
     gemm_left_op_hidden_dims: List[int] = None
@@ -51,12 +52,16 @@ class OfflineProfileConfigs:
     gemm_right_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the right operand in GEMM operations. """
 
+    # Communication
     allreduce_op_type: Callable = torch.distributed.all_reduce
 
     comm_data_sizes: List[int] = field(
         default_factory=lambda: [32*1024*4096, ]
     )
     """ Communication data sizes. """
+
+    comm_group_size: int = 1
+    """ Number of ranks in this communication group. """
 
     dtype: torch.dtype = torch.float16
     """ Data type for profiling. Default is float16. """
@@ -234,6 +239,12 @@ class CriusOfflineDataManager:
     @classmethod
     def get_query_key(
         cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+        comm_group_size: int = 1,
     ) -> str:
         """ Generate a unique query key for the GEMM operation. """
-        return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+
+        if op_type == "gemm":
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+        elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+            assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_g{comm_group_size}"

@@ -36,20 +36,25 @@ class CompileConfigs:
 def compile(
     model: nn.Module,
     compile_configs: CompileConfigs,
+    forward_backward_pass: Callable = None,
 ) -> IRGraph:
     """ Python-to-IR compilation. 
     
     Args:
         model: Torch-like model to be compiled.
         compile_configs: Compilation configurations.
+        forward_backward_pass: Forward-backward pass function, set to `None` for forward-only case.
     """
     
     # Step 1. Transform model into IR graph
-    graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
+    graph, bw_graph = transform_to_ir_graph(model, forward_backward_pass, *compile_configs.base_input_args)
+
+    exit(0)
+
     # Step 2. Propagate per-node input/output shapes
     graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
     graph = infer_node_layer_types(graph)
     # Step 3. Insert communication primitives
     graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan)
 
-    return graph
+    return graph, bw_graph

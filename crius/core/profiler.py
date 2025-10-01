@@ -7,7 +7,7 @@
 This module is independent to the underlying training backend (e.g., Megatron).
 """
 
-from typing import (Any, Tuple, Optional, List)
+from typing import (Any, Tuple, Optional, List, Callable)
 import numpy as np
 import pickle
 
@@ -18,7 +18,7 @@ from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
 from crius.offline.offline_profiler import CriusOfflineDataManager
-from crius.global_envs import logger
+from crius.global_envs import logger, global_configs
 
 
 class CriusDistProfiler:
@@ -48,6 +48,7 @@ class CriusDistProfiler:
         base_input_args: Tuple[Any],
         parallelism_plan: ParallelismPlan,
         only_forward: bool = False,
+        forward_backward_pass: Callable = None,
     ) -> Optional[float]:
         """ Profile the model. 
         
@@ -56,6 +57,7 @@ class CriusDistProfiler:
             base_input_args: Input arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
             only_forward: If True, only profile the forward pass. Default is False.
+            forward_backward_pass: Forward-backward pass function, set to `None` for forward-only case.
         
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
@@ -66,10 +68,10 @@ class CriusDistProfiler:
             base_input_args=base_input_args,
             parallelism_plan=parallelism_plan,
         )
-        graph = compile(model, compile_configs)
+        graph, bw_graph = compile(model, compile_configs, forward_backward_pass)
 
         # Step 2. Query and record per-operator latencies
-        graph = self._query_operator_latencies_ms(graph)
+        graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
         for node in graph.nodes:
             logger.debug(f"=====> Node target: {node.target}")
             logger.debug(f"Node name: {node.name} | OP type: {node.op} | " + 
@@ -77,7 +79,7 @@ class CriusDistProfiler:
                          f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
 
         # Step 3. Compute per-stage latency
-        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan)  
+        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
 
         # Step 4. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
@@ -85,7 +87,7 @@ class CriusDistProfiler:
         )
         return e2e_latency
 
-    def _query_operator_latencies_ms(self, graph: IRGraph):
+    def _query_operator_latencies_ms(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: IRGraph = None):
         """ Query operator latencies(ms) from offline profiled data. """
 
         for node in graph.nodes:
@@ -97,12 +99,14 @@ class CriusDistProfiler:
                 if self._profiled_data is not None:
                     # Query the latency from the profiled data
                     input_shapes, output_shapes = node.input_shapes, node.output_shapes
-
-                    print("\n\n", node.layer_type, input_shapes, output_shapes)
-
+                    comm_group_size = None
+                    if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter"):
+                        comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
+                    
                     query_key = CriusOfflineDataManager.get_query_key(
                         op_type=node.layer_type, batch_size=input_shapes[0][0], seq_len=input_shapes[0][1],
                         left_op_hidden_dim=input_shapes[0][2], right_op_hidden_dim=output_shapes[0][2],
+                        comm_group_size=comm_group_size,
                     )
                     if query_key in self._profiled_data:
                         node_latency = self._profiled_data[query_key]["latency_ms"]
@@ -114,9 +118,23 @@ class CriusDistProfiler:
                 # Non dominant nodes
                 setattr(node, "latency", None)
 
-        return graph
+        return graph, bw_graph
+    
+    def _get_comm_group_size_one_node(self, node: IRNode, parallelism_plan: ParallelismPlan) -> int:
+        """ Get the communication group size for one node. """
 
-    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan) -> List[List[float]]:
+        print(node.target, node.layer_type)
+
+        if node.node_parallelism == "tp":
+            return parallelism_plan.tensor_parallel_degree
+        elif node.node_parallelism == "dp":
+            return parallelism_plan.data_parallel_degree
+        elif node.node_parallelism == "pp":
+            return 2    # P2P communication
+        else:
+            raise NotImplementedError("Unsupported node parallelism plan...")
+
+    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph]) -> List[List[float]]:
         """ Compute per-stage latencies. """
 
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
@@ -131,9 +149,13 @@ class CriusDistProfiler:
             if node.latency is not None and stage_index is not None:
                 stage_latencies[stage_index][0] += node.latency
         
-        # For backward pass, we assume the latency is 2x of the forward pass.
-        for i in range(parallelism_plan.pipeline_parallel_degree):
-            stage_latencies[i][1] = stage_latencies[i][0] * 2.0
+        if not global_configs.enable_backward_graph_generation:
+            # For backward pass, we assume the latency is 2x of the forward pass.
+            logger.warning("No backward graph generation, use '2x forward stage latency' to estimate backward stage latency.")
+            for i in range(parallelism_plan.pipeline_parallel_degree):
+                stage_latencies[i][1] = stage_latencies[i][0] * 2.0
+        else:
+            raise NotImplementedError
 
         return stage_latencies
 

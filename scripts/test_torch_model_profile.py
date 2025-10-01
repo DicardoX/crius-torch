@@ -226,7 +226,8 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 
-        from megatron.core.model_parallel_config import ModelParallelConfig
+        # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.transformer.transformer_config import TransformerConfig
         from megatron.core.transformer.module import MegatronModule
         from megatron.core import mpu
         # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
@@ -253,7 +254,7 @@ class TorchModelProfileTest(unittest.TestCase):
             """Tensor parallel version of ToyLayer using Megatron's ColumnParallelLinear and RowParallelLinear."""
             
             def __init__(
-                self, hidden_size: int, config: ModelParallelConfig, device: str, dtype: str = torch.float16,
+                self, hidden_size: int, config: TransformerConfig, device: str, dtype: str = torch.float16,
             ) -> None:
                 super().__init__()
                 self.dtype = dtype
@@ -288,12 +289,12 @@ class TorchModelProfileTest(unittest.TestCase):
         class MegatronToyModel(MegatronModule):
             """ Toy Megatron model. """
 
-            def __init__(self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16, megatron_configs: Any = None) -> None:
-                super().__init__(config=None)
+            def __init__(self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16, megatron_config: Any = None) -> None:
+                super().__init__(config=megatron_config)
                 self.device = device
                 self.num_layers = num_layers
                 # self.layers = nn.ModuleList([MegatronToyLayer(hidden_size, device, dtype) for _ in range(num_layers)])
-                self.layers = nn.ModuleList([ToyLayerTP(hidden_size, megatron_configs, device, dtype) for _ in range(num_layers)])
+                self.layers = nn.ModuleList([ToyLayerTP(hidden_size, megatron_config, device, dtype) for _ in range(num_layers)])
                 self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
 
             def forward(self, input_: torch.Tensor) -> torch.Tensor:
@@ -302,9 +303,9 @@ class TorchModelProfileTest(unittest.TestCase):
                     hidden_states = self.layers[i](hidden_states)
                 return self.layer_norm(hidden_states)
             
-        def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str, megatron_configs: Any = None) -> nn.Module:
+        def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str, megatron_config: Any = None) -> nn.Module:
             """ Model provider function. """
-            return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_configs=megatron_configs)
+            return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
 
 
         global_bs = 8
@@ -314,44 +315,14 @@ class TorchModelProfileTest(unittest.TestCase):
         num_layers = 4
         dtype = torch.float16
         device = "cuda"
-
-        initialize_distributed(
-            tensor_model_parallel_size=2,
-            pipeline_model_parallel_size=1,
-        )
-        model_parallel_cuda_manual_seed(1234)
-
-        # Create ModelParallelConfig for Megatron
-        megatron_configs = ModelParallelConfig(
-            tensor_model_parallel_size=2,
-            pipeline_model_parallel_size=1,
-        )
-
-        # Model
-        # _model_loader_class = ShadowModelLoader
-        _model_loader_class = ModelLoader
-        model_loader = _model_loader_class(
-            model_provider=model_provider,
-            model_kwargs={
-                "hidden_size": hidden_size,
-                "num_layers": num_layers,
-                "device": device,
-                "dtype": dtype,
-                "megatron_configs": megatron_configs,
-            },
-            device_str=device,
-            # fake_device_str=device,
-        )
-        model = model_loader.load()
         
-        # Inputs
-        data = [
-            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
-                for _ in range(num_micro_batches)
-        ]
+        global_configs.training_backend = "megatron"
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 1
+        # global_configs.enable_backward_graph_generation = True
 
         # Parallelism plan
-        # TODO(chunyu): Currently we manually specify the mappings
         op_to_layer_mapping = {
             'L__self___layers_0_fc1': 0,
             'L__self___layers_0_fc2': 0,
@@ -366,23 +337,71 @@ class TorchModelProfileTest(unittest.TestCase):
         layer_to_stage_mapping = [[0, 1, 2, 3]]
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
-            pipeline_parallel_degree=1,
+            pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
             num_microbatches=num_micro_batches,
-            tensor_parallel_degree=2,
-            data_parallel_degree=1,
+            tensor_parallel_degree=global_configs.tensor_model_parallel_size,
+            data_parallel_degree=global_configs.data_parallel_size,
             op_to_layer_mapping=op_to_layer_mapping,
             layer_to_stage_mapping=layer_to_stage_mapping,
         )
 
         # We manually set the communication op insertion rules for 
         global_configs.comm_op_insert_rules = {
-            "all_reduce": {
+            "all_reduce:tp": {
                 # "after_nodes": ['fc2', ],
                 # "after_nodes": ['matmul', ],
                 "after_nodes": ['contiguous', ],
                 "interval": 1,
+                "pass": 'forward',
+                "parallelism": 'tp',
             },
+            # "all_reduce:dp": {
+            #     "after_nodes": ['contiguous', ],
+            #     "interval": 1,
+            #     "pass": 'backward',
+            #     "parallelism": 'dp',
+            # },
         }
+
+
+        # Init distributed
+        initialize_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        )
+        model_parallel_cuda_manual_seed(1234)
+
+        # Create TransformerConfig for Megatron
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+        )
+
+        # Model
+        # _model_loader_class = ShadowModelLoader
+        _model_loader_class = ModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+                "dtype": dtype,
+                "megatron_config": megatron_config,
+            },
+            device_str=device,
+            # fake_device_str=device,
+        )
+        model = model_loader.load()
+        
+        # Inputs
+        data = [
+            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
+                for _ in range(num_micro_batches)
+        ]
 
         # Profile
         profiler = CriusDistProfiler(
@@ -393,6 +412,7 @@ class TorchModelProfileTest(unittest.TestCase):
             base_input_args=(data[0], ),
             parallelism_plan=parallelism_plan,
             only_forward=True,
+            forward_backward_pass=None,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
@@ -406,7 +426,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "num_layers": num_layers,
                 "device": device,
                 "dtype": dtype,
-                "megatron_configs": megatron_configs,
+                "megatron_config": megatron_config,
             },
             device_str=device,
         )
