@@ -317,10 +317,10 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cuda"
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
-        # global_configs.enable_backward_graph_generation = True
+        global_configs.data_parallel_size = 2
+        global_configs.enable_backward_graph_generation = True
 
         # Parallelism plan
         op_to_layer_mapping = {
@@ -355,14 +355,13 @@ class TorchModelProfileTest(unittest.TestCase):
                 "pass": 'forward',
                 "parallelism": 'tp',
             },
-            # "all_reduce:dp": {
-            #     "after_nodes": ['contiguous', ],
-            #     "interval": 1,
-            #     "pass": 'backward',
-            #     "parallelism": 'dp',
-            # },
+            "all_reduce:dp": {
+                "after_nodes": ['contiguous', ],
+                "interval": 1,
+                "pass": 'backward',
+                "parallelism": 'dp',
+            },
         }
-
 
         # Init distributed
         initialize_distributed(
@@ -412,7 +411,6 @@ class TorchModelProfileTest(unittest.TestCase):
             base_input_args=(data[0], ),
             parallelism_plan=parallelism_plan,
             only_forward=True,
-            forward_backward_pass=None,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")

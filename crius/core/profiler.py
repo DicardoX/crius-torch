@@ -48,7 +48,6 @@ class CriusDistProfiler:
         base_input_args: Tuple[Any],
         parallelism_plan: ParallelismPlan,
         only_forward: bool = False,
-        forward_backward_pass: Callable = None,
     ) -> Optional[float]:
         """ Profile the model. 
         
@@ -57,7 +56,6 @@ class CriusDistProfiler:
             base_input_args: Input arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
             only_forward: If True, only profile the forward pass. Default is False.
-            forward_backward_pass: Forward-backward pass function, set to `None` for forward-only case.
         
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
@@ -68,7 +66,7 @@ class CriusDistProfiler:
             base_input_args=base_input_args,
             parallelism_plan=parallelism_plan,
         )
-        graph, bw_graph = compile(model, compile_configs, forward_backward_pass)
+        graph, bw_graph = compile(model, compile_configs)
 
         # Step 2. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
