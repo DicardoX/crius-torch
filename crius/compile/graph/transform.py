@@ -92,34 +92,42 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
         return None
     
     for node in graph.nodes:
-        if hasattr(node, 'layer_type'):
+        setattr(node.next, "node_pass", "forward")
+
+        if hasattr(node, "layer_type"):
             continue
         
-        if node.op == 'call_module':
+        if node.op == "call_module":
             if (
                 # ------------- String matching rules -------------
-                'fc' in str(node.target)
+                "fc" in str(node.target)
             ):
-                setattr(node, 'layer_type', 'gemm')
+                setattr(node, "layer_type", "gemm")
+                setattr(node, "layout", "b:s:h1,h1:h2")
             else:
-                setattr(node, 'layer_type', 'unknown_call_module')
+                setattr(node, "layer_type", "unknown_call_module")
+                setattr(node, "layout", None)
         
-        elif node.op == 'call_function':
+        elif node.op == "call_function":
             if (
                 # ------------- String matching rules -------------
-                'all_reduce' in str(node.target)
+                "all_reduce" in str(node.target)
             ):
-                setattr(node, 'layer_type', 'all_reduce')
+                setattr(node, "layer_type", "all_reduce")
+                setattr(node, "layout", None)
             elif (
                 # ------------- String matching rules -------------
-                'matmul' in str(node.target)
+                "matmul" in str(node.target)
             ):
-                setattr(node, 'layer_type', 'gemm')
+                setattr(node, "layer_type", "gemm")
+                setattr(node, "layout", "b:s:h1,h1:h2")
             else:
-                setattr(node, 'layer_type', 'unknown_call_function')
+                setattr(node, "layer_type", "unknown_call_function")
+                setattr(node, "layout", None)
         
         else:
-            setattr(node, 'layer_type', 'unknown_others')
+            setattr(node, "layer_type", "unknown_others")
+            setattr(node, "layout", None)
 
     return graph
 
@@ -176,6 +184,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
         after_node_num = 0
 
         if forward_pass:
+            # Forward pass
             for node in graph.nodes:
                 for after_node_keyword in after_nodes:
                     if after_node_keyword not in str(node.target):
@@ -202,8 +211,12 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                     raise NotImplementedError("Implement customized communication node insertion here.")
         
         else:
+            # Backward pass
             for node in graph.nodes:
-                assert node.layer_type in ("gemm", ), f"Invalid node layer type in backward graph: {node.layer_type}"
+                if node.layer_type == comm_primitive:
+                    continue    # Just inserted
+
+                assert node.layer_type in ("gemm", "reduce_sum" ), f"Invalid node layer type in backward graph: {node.layer_type}"
                 for after_node_keyword in after_nodes:
                     if after_node_keyword not in str(node.target):
                         continue
@@ -220,16 +233,30 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                     
                     # Insert a communication node
                     with graph.inserting_after(node):
-                        comm_node = graph.create_node(op="call_function", target=comm_primitive)
-                    
-                    raise NotImplementedError("This is wrong, fix communication node insertion...")
-    
-            for node in graph.nodes:
-                print(node.layer_type, node.target)
-            
-            exit(0)
+                        comm_node = graph.call_function(global_configs.comm_op_funcs[comm_primitive], args=(node, ))
+                        setattr(comm_node, "layer_type", comm_primitive)
+                        input_shapes, output_shapes = _infer_comm_node_input_output_shapes(node, comm_primitive, node_pass, node_parallelism)
+                        setattr(comm_node, "input_shapes", input_shapes)
+                        setattr(comm_node, "output_shapes", output_shapes)
+                        setattr(comm_node, "node_pass", node_pass)
+                        setattr(comm_node, "node_parallelism", node_parallelism)
 
     return graph
+
+
+def _infer_comm_node_input_output_shapes(
+    prev_node: IRNode, primitive_type: str, node_pass: str, node_parallelism: str,
+) -> Tuple[List[Any], List[Any]]:
+    """ Case-specific infer the input/output shapes of a communication node. """
+
+    if primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "dp":
+        # All-reduce the weight gradients (output) of previous node
+        assert len(prev_node.output_shapes[0]) == 2     # [h1, h2]
+        input_shapes = output_shapes = prev_node.output_shapes
+    else:
+        raise NotImplementedError("Unsupport case when inferring input/output shapes of communication node.")
+    
+    return input_shapes, output_shapes
 
 
 def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
@@ -254,22 +281,43 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             right_hidden_dim = node.input_shapes[1][-1]
 
             # Input gradient: [b, s, h2] x [h2, h1] -> [b, s, h1]
-            bw_node_input_grad = bw_graph.create_node(op="call_function", target=node.target)
+            def __fake_bw_func_input_grad():
+                return None
+
+            bw_node_input_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_input_grad)
             input_shapes_ = [torch.Size([batch_size, seq_len, right_hidden_dim]), torch.Size([right_hidden_dim, left_hidden_dim])]
             output_shapes_ = [torch.Size([batch_size, seq_len, left_hidden_dim])]
+            setattr(bw_node_input_grad, "node_pass", "backward")
             setattr(bw_node_input_grad, 'input_shapes', input_shapes_)
             setattr(bw_node_input_grad, 'output_shapes', output_shapes_)
             setattr(bw_node_input_grad, 'layer_type', 'gemm')
+            setattr(bw_node_input_grad, "layout", "b:s:h2,h2:h1")
 
-            # Weight gradient: [b, h1, s] x [b, s, h2] -> [bs, h1, h2] -> [h1, h2]
-            bw_node_weight_grad = bw_graph.create_node(op="call_function", target=node.target)
+            # Weight gradient: [b, h1, s] x [b, s, h2] -> [b, h1, h2]
+            def __fake_bw_func_weight_grad():
+                return None
+            
+            bw_node_weight_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_weight_grad)
             input_shapes_ = [torch.Size([batch_size, left_hidden_dim, seq_len]), torch.Size([batch_size, seq_len, right_hidden_dim])]
             output_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
+            setattr(bw_node_weight_grad, "node_pass", "backward")
             setattr(bw_node_weight_grad, 'input_shapes', input_shapes_)
             setattr(bw_node_weight_grad, 'output_shapes', output_shapes_)
             setattr(bw_node_weight_grad, 'layer_type', 'gemm')
+            setattr(bw_node_weight_grad, "layout", "b:h1:s,b:s:h2")
 
-            # FIXME: Currently we ignore the sum operation (dim0) of weight gradient...
+            # Summing weight gradient dim0: [b, h1, h2] -> [h1, h2]
+            def __fake_bw_func_weight_grad_reduce_sum():
+                return None
+            
+            bw_node_weight_grad_reduce_sum = bw_graph.create_node(op="call_function", target=__fake_bw_func_weight_grad_reduce_sum)
+            input_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
+            output_shapes_ = [torch.Size([left_hidden_dim, right_hidden_dim])]
+            setattr(bw_node_weight_grad_reduce_sum, "node_pass", "backward")
+            setattr(bw_node_weight_grad_reduce_sum, 'input_shapes', input_shapes_)
+            setattr(bw_node_weight_grad_reduce_sum, 'output_shapes', output_shapes_)
+            setattr(bw_node_weight_grad_reduce_sum, 'layer_type', 'reduce_sum')
+            setattr(bw_node_weight_grad_reduce_sum, "layout", "b:h1:h2")
 
         elif node.layer_type == "all_reduce":
             pass    # Directly return out_grad, which are the same across all ranks, as outputs are the same after allreduce in forward

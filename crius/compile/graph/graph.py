@@ -46,7 +46,11 @@ class IRNode(fx.Node):
         return_type: Optional[Any] = None,
     ) -> None:
         super().__init__(graph, name, op, target, args, kwargs, return_type)
-        # Profiled
+        
+        self.layer_type = None
+        self.input_shapes, self.output_shapes = None, None
+        self.node_pass, self.node_parallelism = None, None
+        self.layout = None
         self.latency: Optional[float] = None
 
 

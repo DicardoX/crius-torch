@@ -356,7 +356,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "parallelism": 'tp',
             },
             "all_reduce:dp": {
-                "after_nodes": ['contiguous', ],
+                "after_nodes": ['reduce_sum', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',

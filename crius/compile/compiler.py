@@ -56,6 +56,4 @@ def compile(
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, compile_configs.parallelism_plan, forward_pass=False)
 
-    exit(0)
-
     return graph, bw_graph

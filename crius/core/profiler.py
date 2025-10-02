@@ -70,11 +70,23 @@ class CriusDistProfiler:
 
         # Step 2. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
+        logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
-            logger.debug(f"=====> Node target: {node.target}")
-            logger.debug(f"Node name: {node.name} | OP type: {node.op} | " + 
-                         f"Next: {node.next} | Input shapes: {node.input_shapes} | " + 
-                         f"Output shapes: {node.output_shapes} | Latency: {node.latency}\n")
+            latency = getattr(node, "latency", None)
+            logger.debug(f"=====> Node target: {node.target} | ")
+            logger.debug(f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                         f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                         f"Latency: {latency} | Layout: {node.layout}\n")
+        if bw_graph is not None:
+            logger.debug("\n\n============> Backward graph")
+            for node in bw_graph.nodes:
+                latency = getattr(node, "latency", None)
+                logger.debug(f"=====> Node target: {node.target} | ")
+                logger.debug(f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                             f"Latency: {latency} | Layout: {node.layout}\n")
+        
+        exit(0)
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
@@ -88,40 +100,76 @@ class CriusDistProfiler:
     def _query_operator_latencies_ms(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: IRGraph = None):
         """ Query operator latencies(ms) from offline profiled data. """
 
-        for node in graph.nodes:
-            if (
-                str(node.op) in ("call_module", "call_function", "call_method") and
-                "unknown" not in node.layer_type
-            ):
-                node_latency = 0.0
-                if self._profiled_data is not None:
-                    # Query the latency from the profiled data
-                    input_shapes, output_shapes = node.input_shapes, node.output_shapes
-                    comm_group_size = None
-                    if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter"):
-                        comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
+        def __query_one_graph(graph_): 
+            for node in graph_.nodes:
+                if (
+                    str(node.op) in ("call_module", "call_function", "call_method") and
+                    "unknown" not in node.layer_type
+                ):
+                    node_latency = 0.0
+                    if self._profiled_data is not None:
+                        # Query the latency from the profiled data
+                        input_shapes, output_shapes = node.input_shapes, node.output_shapes
+                        batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim = None, None, None, None
+                        comm_group_size, comm_data_size = None, None
+
+                        if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
+                            comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
+                            comm_data_size = np.prod(list(input_shapes))
+                        
+                        elif node.layer_type in ("gemm", "reduce_sum", ):
+                            assert getattr(node, "layout", None) is not None
+                            layout = [l.split(":") for l in node.layout.split(",")]
+                            batch_size_indices = self._get_one_dim_index("b", layout)
+                            seq_len_indices = self._get_one_dim_index("s", layout)
+                            left_op_hidden_dim_indices = self._get_one_dim_index("h1", layout)
+                            right_op_hidden_dim_indices = self._get_one_dim_index("h2", layout)
+
+                            batch_size = input_shapes[batch_size_indices[0]][batch_size_indices[1]] \
+                                if batch_size_indices is not None else None
+                            seq_len = input_shapes[seq_len_indices[0]][seq_len_indices[1]] \
+                                if seq_len_indices is not None else None
+                            left_op_hidden_dim = input_shapes[left_op_hidden_dim_indices[0]][left_op_hidden_dim_indices[1]] \
+                                if left_op_hidden_dim_indices is not None else None
+                            right_op_hidden_dim = input_shapes[right_op_hidden_dim_indices[0]][right_op_hidden_dim_indices[1]] \
+                                if right_op_hidden_dim_indices is not None else None
+                        
+                        else:
+                            raise ValueError(f"Unsupported node layer type: {node.layer_type}")
+                        
+                        query_key = CriusOfflineDataManager.get_query_key(
+                            node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
+                            comm_group_size, comm_data_size,
+                        )
+                        if query_key in self._profiled_data:
+                            node_latency = self._profiled_data[query_key]["latency_ms"]
+                        else:
+                            logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
                     
-                    query_key = CriusOfflineDataManager.get_query_key(
-                        op_type=node.layer_type, batch_size=input_shapes[0][0], seq_len=input_shapes[0][1],
-                        left_op_hidden_dim=input_shapes[0][2], right_op_hidden_dim=output_shapes[0][2],
-                        comm_group_size=comm_group_size,
-                    )
-                    if query_key in self._profiled_data:
-                        node_latency = self._profiled_data[query_key]["latency_ms"]
-                    else:
-                        logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
-                
-                setattr(node, "latency", node_latency)
-            else:
-                # Non dominant nodes
-                setattr(node, "latency", None)
+                    setattr(node, "latency", node_latency)
+                else:
+                    # Non dominant nodes
+                    setattr(node, "latency", None)
+        
+        __query_one_graph(graph)
+        if bw_graph is not None:
+            __query_one_graph(bw_graph)
 
         return graph, bw_graph
     
+    def _get_one_dim_index(self, dim_str: str, layout: List[List[str]]) -> Tuple[int]:
+        """ Get the first 2D indices from the layout. 
+        
+        Example: (input) 'b' -> [['b', 's', 'h1'], ['h1', 'h2']] -> (return) [0, 0]
+        """
+        for i, sub_layout in enumerate(layout):
+            for j, dim in enumerate(sub_layout):
+                if dim == dim_str:
+                    return (i, j)
+        return None
+    
     def _get_comm_group_size_one_node(self, node: IRNode, parallelism_plan: ParallelismPlan) -> int:
         """ Get the communication group size for one node. """
-
-        print(node.target, node.layer_type)
 
         if node.node_parallelism == "tp":
             return parallelism_plan.tensor_parallel_degree

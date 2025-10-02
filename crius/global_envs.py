@@ -4,7 +4,7 @@
 
 """ Global environmental configurations. """
 
-from typing import (Tuple, Dict, Any, List)
+from typing import (Tuple, Dict, Any, List, Callable)
 from dataclasses import dataclass, field
 from collections import OrderedDict
 import logging
@@ -80,6 +80,13 @@ class GlobalEnvConfigs:
         default_factory=lambda: ["all_reduce", "all_gather", "reduce_scatter", "all_to_all", ]
     )
     """ Supported communication primitives. """
+
+    comm_op_funcs: Dict[str, Callable] = field(
+        default_factory=lambda: {
+            "all_reduce": torch.distributed.all_reduce,
+        }
+    )
+    """ Function implementations of communication operators. """
 
 
 global_configs = GlobalEnvConfigs()
