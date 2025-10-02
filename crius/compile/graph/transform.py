@@ -154,28 +154,45 @@ def insert_comm_primitives_into_graph(
         
         return False
     
-    def is_pipeline_boundary(node: Node, graph: Graph) -> bool:
-        if node.name in graph.node_layer_mapping:
-            node_layer_info = graph.node_layer_mapping[node.name]
-        else:
-            return False
-        
-        if str(node_layer_info['layer_class']) != "RowParallelLinear":
-            return False
-        
-        next_node = node.next
+    # def is_pipeline_boundary(node: Node, graph: Graph) -> bool:
+    #     def _is_forward_step_boundary(node: torch.fx.Node, graph: fx.Graph) -> bool:
+    #         if hasattr(node, 'target') and isinstance(node.target, str):
+    #             if 'forward_step' in node.target:
+    #                 return True
+                
+    #             for user in graph.users[node]:
+    #                 if hasattr(user, 'target') and 'forward_step' in str(user.target):
+    #                     return True
+            
+    #         return False
 
-        if next_node is None:
-            return True
+    #     def _involves_pipeline_parallel_rank(node: torch.fx.Node) -> bool:
+    #         pipeline_rank_patterns = [
+    #             'get_pipeline_model_parallel_rank',
+    #             'pipeline_parallel_rank',
+    #             'pp_rank',
+    #             'stage_id'
+    #         ]
+            
+    #         if hasattr(node, 'target') and isinstance(node.target, str):
+    #             target_str = str(node.target).lower()
+    #             if any(pattern in target_str for pattern in pipeline_rank_patterns):
+    #                 return True
+            
+    #         for arg in node.args:
+    #             if isinstance(arg, str) and any(pattern in arg.lower() for pattern in pipeline_rank_patterns):
+    #                 return True
+            
+    #         return False
         
-        next_node_layer_info = graph.node_layer_mapping[next_node.name]
+
+    #     if _is_forward_step_boundary(node, graph):
+    #         return True
         
-        if str(next_node_layer_info['layer_class']) != "RowParallelLinear" or \
-        (str(next_node_layer_info['layer_class']) == "RowParallelLinear" and \
-         str(node_layer_info['module_path']) != str(next_node_layer_info['module_path'])):
-            return True
+    #     if _involves_pipeline_parallel_rank(node):
+    #         return True
         
-        return False
+    #     return False
         
     # tp_group = parallelism_plan.tensor_parallel_group
     # tp_size = parallelism_plan.tensor_parallel_degree
@@ -199,11 +216,12 @@ def insert_comm_primitives_into_graph(
                 comm_node = graph.call_function(torch.distributed.all_reduce)
                 # comm_node = Node(graph=graph, name="all_reduce", op="call_function", target=torch.distributed.all_gather, args=[], kwargs={})
 
-        if is_pipeline_boundary(node, graph):
-            with graph.inserting_after(node):
-                comm_node = graph.call_function(torch.distributed.send_rev)
+        # if is_pipeline_boundary(node, graph):
+        #     with graph.inserting_after(node):
+        #         comm_node = graph.call_function(torch.distributed.send_rev)
             
 
-    print("\n")
-    print(graph)
+    # print("\n")
+    # print(graph)
     return graph
+

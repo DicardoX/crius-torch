@@ -57,6 +57,10 @@ def compile(
     graph = tracer.trace(model)
 
     # Step 3. Insert communication primitives
+    print("Before inserting:")
+    print(graph)
     graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan)
+    print("After inserting:")
+    print(graph)
 
     return graph

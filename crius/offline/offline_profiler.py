@@ -6,9 +6,6 @@
 
 import os
 import sys
-os.environ['NCCL_SHM_DISABLE'] = '1'  
-os.environ['NCCL_P2P_DISABLE'] = '1'  
-os.environ['NCCL_IB_DISABLE'] = '1'   
 
 from typing import (Any, Dict, List, Optional, Tuple, Union, Callable, overload)
 from dataclasses import dataclass
@@ -66,8 +63,8 @@ class OfflineProfileConfigs:
     tp_degrees: List[int] = None
     """ ###### """
 
-    comm_data_sizes: List[int] = None
-    """ ###### """
+    # comm_data_sizes: List[int] = None
+    # """ ###### """
 
     dtype: torch.dtype = torch.float16
     """ Data type for profiling. Default is float16. """
@@ -99,158 +96,18 @@ class OfflineProfileConfigs:
             ]
         if self.tp_degrees is None:
             self.tp_degrees = [2, 4, 8, 16]
-        if self.comm_data_sizes is None:
-            self.comm_data_sizes = [
-                1024, 4096, 16384, 65536, 262144,  # QKV
+        # if self.comm_data_sizes is None:
+        #     self.comm_data_sizes = [
+        #         1024, 4096, 16384, 65536, 262144,  # QKV
 
-                1048576, 4194304, 16777216,        # MLP
+        #         1048576, 4194304, 16777216,        # MLP
 
-                67108864, 134217728, 268435456     # grad
-            ]
+        #         67108864, 134217728, 268435456     # grad
+        #     ]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
 
-os.environ['NCCL_SHM_DISABLE'] = '1'  
-os.environ['NCCL_P2P_DISABLE'] = '1'  
-os.environ['NCCL_IB_DISABLE'] = '1'   
-
-def setup(rank, world_size):
-    """init-dist"""
-    # sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # sock.bind(('localhost', 0))
-    # port = sock.getsockname()[1]
-    # sock.close()
-    
-    # os.environ['MASTER_ADDR'] = 'localhost'
-    # os.environ['MASTER_PORT'] = str(port)
-    # os.environ['WORLD_SIZE'] = str(world_size)
-    # os.environ['RANK'] = str(rank)
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
-        world_size=world_size,
-        rank=rank
-    )
-
-def cleanup():
-    """clear-dist"""
-    dist.destroy_process_group()
-
-def benchmark_all_reduce(rank, world_size, tensor_sizes: List[int], num_iterations):
-    """base all_reduce"""
-    results = {}
-    
-    for size in tensor_sizes:
-        # create tensor
-        tensor = torch.randn(size, device=f"cuda:{rank}")
-        
-        # warmup
-        for _ in range(10):
-            dist.all_reduce(tensor)
-        
-        # sync
-        dist.barrier()
-        
-        # timing
-        start_time = time.time()
-        for _ in range(num_iterations):
-            dist.all_reduce(tensor)
-        dist.barrier()
-        end_time = time.time()
-        
-        # cal average latency(ms)
-        avg_latency = (end_time - start_time) * 1000 / num_iterations
-        results[size] = avg_latency
-        
-        # if rank == 0:
-            # print(f"AllReduce - Size: {size}, Avg Latency: {avg_latency:.4f} ms")
-    
-    return results
-
-def benchmark_all_gather(rank, world_size, tensor_sizes: List[int], num_iterations):
-    """base all_gather"""
-    results = {}
-    
-    for size in tensor_sizes:
-        # create tensor
-        tensor = torch.randn(size, device=f"cuda:{rank}")
-        output_tensors = [torch.zeros_like(tensor) for _ in range(world_size)]
-        
-        # warmup
-        for _ in range(10):
-            dist.all_gather(output_tensors, tensor)
-        
-        # sync
-        dist.barrier()
-        
-        # timing
-        start_time = time.time()
-        for _ in range(num_iterations):
-            dist.all_gather(output_tensors, tensor)
-        dist.barrier()
-        end_time = time.time()
-        
-        # cal average latency(ms)
-        avg_latency = (end_time - start_time) * 1000 / num_iterations
-        results[size] = avg_latency
-        
-        # if rank == 0:
-            # print(f"AllGather - Size: {size}, Avg Latency: {avg_latency:.4f} ms")
-    
-    return results
-
-def run_benchmark(rank, world_size, configs):
-    """run base test"""
-    setup(rank, world_size)
-    
-    # tensor size
-    tensor_sizes = [
-        1024,        # 1K
-        10240,       # 10K
-        102400,      # 100K
-        1024000,     # 1M
-        10240000,    # 10M
-    ]
-    
-    if rank == 0:
-        print(f"=== Benchmark with World Size: {world_size} ===")
-        print(f"Number of iterations: {configs.num_profile_steps}")
-        print(f"Tensor sizes: {tensor_sizes}")
-        print("-" * 50)
-    
-    # all_reduce test
-    if rank == 0:
-        print("\nTesting all_reduce...")
-    all_reduce_results = benchmark_all_reduce(rank, world_size, tensor_sizes, configs.num_profile_steps)
-    
-    # all_gather test
-    if rank == 0:
-        print("\nTesting all_gather...")
-    all_gather_results = benchmark_all_gather(rank, world_size, tensor_sizes, configs.num_profile_steps)
-    
-    # gather at rank0
-    if rank == 0:
-        print("\n" + "="*50)
-        print("SUMMARY RESULTS:")
-        print("="*50)
-        print("\nall_reduce Results:")
-        for size, latency in all_reduce_results.items():
-            print(f"Size: {size:8d} | Latency: {latency:.4f} ms")
-        
-        print("\nall_gather Results:")
-        for size, latency in all_gather_results.items():
-            print(f"Size: {size:8d} | Latency: {latency:.4f} ms")
-    
-    cleanup()
-
-def launch(tp_degree, configs):
-    torch.multiprocessing.spawn(
-        run_benchmark,
-        args=(tp_degree, configs),
-        nprocs=tp_degree,
-        join=True
-    )
 
 class CriusOfflineDataManager:
     """ Crius operator-level offline data manager. 
@@ -365,15 +222,25 @@ class CriusOfflineDataManager:
             self,
     ) -> None:
         
-        # mp.set_start_method('spawn', force=True)
-
-        for tp_degree in self.configs.tp_degrees:
-            if tp_degree > torch.cuda.device_count():
-                break
-            launch(tp_degree, self.configs)
-
-        # if dist.is_initialized():
-        #     cleanup()
+        commands = [
+        "torchrun --nnodes=1 --nproc_per_node=2 /app/crius/offline/offline_comm_profile.py",
+        "torchrun --nnodes=1 --nproc_per_node=4 /app/crius/offline/offline_comm_profile.py", 
+        # "torchrun --nnodes=1 --nproc_per_node=8 /app/crius/offline/offline_comm_profile.py"
+        ]
+        
+        print("Running torchrun tests...")
+        
+        for i, cmd in enumerate(commands, 1):
+            print(f"\n{'='*50}")
+            print(f"Running test-{i}/{len(commands)}: {cmd}")
+            print(f"{'='*50}")
+            
+            return_code = os.system(cmd)
+            
+            if return_code == 0:
+                print(f"Test-{i} succeeded")
+            else:
+                print(f"Test-{i} failed (return code: {return_code})")
             
 
     def _load(self) -> None:

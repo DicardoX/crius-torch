@@ -4,10 +4,6 @@
 
 import os
 import sys
-import warnings
-warnings.filterwarnings("ignore", 
-                        category=UserWarning,
-                        module="megatron.core.transformer.transformer_config")
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 app_root = os.path.dirname(current_dir)
