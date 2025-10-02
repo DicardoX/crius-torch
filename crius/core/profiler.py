@@ -73,20 +73,18 @@ class CriusDistProfiler:
         logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
             latency = getattr(node, "latency", None)
-            logger.debug(f"=====> Node target: {node.target} | ")
-            logger.debug(f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+            logger.debug(f"=====> Node target: {node.target} | " + 
+                         f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                          f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                          f"Latency: {latency} | Layout: {node.layout}\n")
         if bw_graph is not None:
             logger.debug("\n\n============> Backward graph")
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
-                logger.debug(f"=====> Node target: {node.target} | ")
-                logger.debug(f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                logger.debug(f"=====> Node target: {node.target} | " + 
+                             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                              f"Latency: {latency} | Layout: {node.layout}\n")
-        
-        exit(0)
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
@@ -110,10 +108,14 @@ class CriusDistProfiler:
                     if self._profiled_data is not None:
                         # Query the latency from the profiled data
                         input_shapes, output_shapes = node.input_shapes, node.output_shapes
-                        batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim = None, None, None, None
+                        batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, layout = None, None, None, None, None
                         comm_group_size, comm_data_size = None, None
 
                         if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
+                            if node.node_parallelism is None:
+                                continue    # This node is a not-used placeholder (not defined in comm op insertion 
+                                            # rules) in model forward definition.
+
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
@@ -139,7 +141,7 @@ class CriusDistProfiler:
                         
                         query_key = CriusOfflineDataManager.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
-                            comm_group_size, comm_data_size,
+                            node.layout, comm_group_size, comm_data_size,
                         )
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
@@ -185,15 +187,13 @@ class CriusDistProfiler:
 
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for node in graph.nodes:
-            layer_index = parallelism_plan.op_to_layer_mapping.get(node.target, None)
-            if layer_index is None:
-                continue
-            stage_index = next(
-                (i for i, stage in enumerate(parallelism_plan.layer_to_stage_mapping) if layer_index in stage), None
-            )
             # Accumulate latency
-            if node.latency is not None and stage_index is not None:
-                stage_latencies[stage_index][0] += node.latency
+            assert node.stage_index is not None, "Forward node stage index is not set."
+            if node.latency is not None and node.stage_index is not None:
+                stage_latencies[node.stage_index][0] += node.latency
+        
+        if global_configs.only_forward:
+            return stage_latencies
         
         if not global_configs.enable_backward_graph_generation:
             # For backward pass, we assume the latency is 2x of the forward pass.
@@ -201,7 +201,11 @@ class CriusDistProfiler:
             for i in range(parallelism_plan.pipeline_parallel_degree):
                 stage_latencies[i][1] = stage_latencies[i][0] * 2.0
         else:
-            raise NotImplementedError
+            assert bw_graph is not None
+            for node in bw_graph.nodes:
+                assert node.stage_index is not None, "Backward node stage index is not set."
+                if node.latency is not None and node.stage_index is not None:
+                    stage_latencies[node.stage_index][1] += node.latency
 
         return stage_latencies
 

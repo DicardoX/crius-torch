@@ -4,7 +4,7 @@
 
 """ Implementation of Torch-like model compiler. """
 
-from typing import (Any, List, Tuple, Callable)
+from typing import (Any, List, Tuple, Callable, Optional)
 from dataclasses import dataclass
 
 import torch
@@ -55,5 +55,53 @@ def compile(
     # Step 4. Construct backward graph
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, compile_configs.parallelism_plan, forward_pass=False)
+    # Step 5. Pipeline stage partition
+    partition_pipeline_stages(graph, compile_configs.parallelism_plan, bw_graph)
 
     return graph, bw_graph
+
+
+def partition_pipeline_stages(
+    graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph] = None,
+) -> None:
+    """ Annotate all nodes' pipeline stage index. """
+
+    def __annotate_node_stage_index(num_nodes_per_stage_: List[int], graph_):
+        this_stage_node_num, cur_stage_index = 0, 0
+        for node in graph_.nodes:
+            this_stage_node_num += 1
+            if this_stage_node_num <= num_nodes_per_stage_[cur_stage_index]:
+                setattr(node, "stage_index", cur_stage_index)
+
+            if this_stage_node_num == num_nodes_per_stage_[cur_stage_index]:
+                cur_stage_index += 1
+                this_stage_node_num = 0
+
+    if parallelism_plan.pipeline_stage_partition_method == "uniform":
+        # Uniformly partition looped layers (e.g., transformer layers)
+        assert parallelism_plan.pipeline_num_preprocess_nodes >=0 and parallelism_plan.pipeline_num_postprocess_nodes >= 0, \
+            f"In uniform pipeline partition mode, users must specify the number of pre/post-process nodes."
+        num_fw_nodes = len(list(graph.nodes))
+        num_fw_loop_nodes = (num_fw_nodes - parallelism_plan.pipeline_num_preprocess_nodes - parallelism_plan.pipeline_num_postprocess_nodes)
+        assert num_fw_loop_nodes % parallelism_plan.pipeline_parallel_degree == 0
+        num_fw_loop_nodes_per_stage_ = num_fw_loop_nodes // parallelism_plan.pipeline_parallel_degree
+        num_fw_nodes_per_stage = [num_fw_loop_nodes_per_stage_ for _ in range(parallelism_plan.pipeline_parallel_degree)]
+        num_fw_nodes_per_stage[0] += parallelism_plan.pipeline_num_preprocess_nodes
+        num_fw_nodes_per_stage[-1] += parallelism_plan.pipeline_num_postprocess_nodes
+        __annotate_node_stage_index(num_fw_nodes_per_stage, graph)
+
+        if bw_graph is None:
+            return
+
+        num_bw_nodes = len(list(bw_graph.nodes))
+        assert num_bw_nodes % parallelism_plan.pipeline_parallel_degree == 0
+        num_bw_nodes_per_stage = [
+            num_bw_nodes // parallelism_plan.pipeline_parallel_degree for _ in range(parallelism_plan.pipeline_parallel_degree)
+        ]
+        __annotate_node_stage_index(num_bw_nodes_per_stage, bw_graph)
+    
+    elif parallelism_plan.pipeline_stage_partition_method == "manual":
+        raise NotImplementedError
+
+    else:
+        raise ValueError(f"Invalid pipeline stage partition method: {parallelism_plan.pipeline_stage_partition_method}")

@@ -318,49 +318,57 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
+        global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
 
         # Parallelism plan
-        op_to_layer_mapping = {
-            'L__self___layers_0_fc1': 0,
-            'L__self___layers_0_fc2': 0,
-            'L__self___layers_1_fc1': 1,
-            'L__self___layers_1_fc2': 1,
-            'L__self___layers_2_fc1': 2,
-            'L__self___layers_2_fc2': 2,
-            'L__self___layers_3_fc1': 3,
-            'L__self___layers_3_fc2': 3,
-            'L__self___layer_norm': 3,
-        }
-        layer_to_stage_mapping = [[0, 1, 2, 3]]
+        # op_to_layer_mapping = {
+        #     'L__self___layers_0_fc1': 0,
+        #     'L__self___layers_0_fc2': 0,
+        #     'L__self___layers_1_fc1': 1,
+        #     'L__self___layers_1_fc2': 1,
+        #     'L__self___layers_2_fc1': 2,
+        #     'L__self___layers_2_fc2': 2,
+        #     'L__self___layers_3_fc1': 3,
+        #     'L__self___layers_3_fc2': 3,
+        #     'L__self___layer_norm': 3,
+        # }
+        # layer_to_stage_mapping = [[0, 1, 2, 3]]
+        op_to_layer_mapping, layer_to_stage_mapping = None, None
+        pipeline_stage_partition_method = "uniform"
+        pipeline_num_preprocess_nodes = 1
+        pipeline_num_postprocess_nodes = 2
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
             pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
             num_microbatches=num_micro_batches,
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,
+            pipeline_stage_partition_method=pipeline_stage_partition_method,
+            pipeline_num_preprocess_nodes=pipeline_num_preprocess_nodes,
+            pipeline_num_postprocess_nodes=pipeline_num_postprocess_nodes,
             op_to_layer_mapping=op_to_layer_mapping,
             layer_to_stage_mapping=layer_to_stage_mapping,
         )
 
-        # We manually set the communication op insertion rules for 
+        # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
-            "all_reduce:tp": {
-                # "after_nodes": ['fc2', ],
-                # "after_nodes": ['matmul', ],
-                "after_nodes": ['contiguous', ],
-                "interval": 1,
-                "pass": 'forward',
-                "parallelism": 'tp',
-            },
-            "all_reduce:dp": {
-                "after_nodes": ['reduce_sum', ],
-                "interval": 1,
-                "pass": 'backward',
-                "parallelism": 'dp',
-            },
+            # "all_reduce:tp": {
+            #     # "after_nodes": ['fc2', ],
+            #     # "after_nodes": ['matmul', ],
+            #     "after_nodes": ['contiguous', ],
+            #     "interval": 1,
+            #     "pass": 'forward',
+            #     "parallelism": 'tp',
+            # },
+            # "all_reduce:dp": {
+            #     "after_nodes": ['reduce_sum', ],
+            #     "interval": 1,
+            #     "pass": 'backward',
+            #     "parallelism": 'dp',
+            # },
         }
 
         # Init distributed
@@ -377,6 +385,8 @@ class TorchModelProfileTest(unittest.TestCase):
             num_layers=num_layers,
             hidden_size=hidden_size,
             num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
         )
 
         # Model
@@ -410,10 +420,12 @@ class TorchModelProfileTest(unittest.TestCase):
             model=model,
             base_input_args=(data[0], ),
             parallelism_plan=parallelism_plan,
-            only_forward=True,
+            only_forward=global_configs.only_forward,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+
+        exit(0)
 
         ################# Real profiling #################
         _model_loader_class = ModelLoader

@@ -73,6 +73,9 @@ class GlobalEnvConfigs:
     If false, will direct estimate backward stage latency as twice that of forward one (might be inaccurate).
     """
 
+    only_forward: bool = False
+    """ Only conduct forward pass for the model. """
+
     #################
     # Communication #
     #################

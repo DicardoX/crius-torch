@@ -52,6 +52,7 @@ class IRNode(fx.Node):
         self.node_pass, self.node_parallelism = None, None
         self.layout = None
         self.latency: Optional[float] = None
+        self.stage_index: int = None    # Which pipeline stage this node belongs to
 
 
 class IRGraph(fx.Graph):

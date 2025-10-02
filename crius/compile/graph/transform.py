@@ -58,14 +58,15 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args) -> IRGraph:
     from torch.fx.passes.shape_prop import ShapeProp
     
     ShapeProp(graph.owning_module).propagate(*input_args)
-    graph = graph.owning_module.graph
-    for node in graph.nodes:
+    graph_ = graph.owning_module.graph
+    for i, node in enumerate(graph_.nodes):
         # Input shapes
         input_shapes = []
         for arg in node.args:
             if isinstance(arg, torch.fx.node.Node) and hasattr(arg, 'meta') and 'tensor_meta' in arg.meta:
                 input_shapes.append(arg.meta['tensor_meta'].shape)
-        setattr(node, 'input_shapes', input_shapes)
+        # setattr(node, 'input_shapes', input_shapes)
+        setattr(list(graph.nodes)[i], 'input_shapes', input_shapes)
         
         # Output shapes
         if hasattr(node, 'meta') and 'tensor_meta' in node.meta:
@@ -75,8 +76,9 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args) -> IRGraph:
             output_shapes = [_meta.shape for _meta in tensor_meta if hasattr(_meta, 'shape')]
         else:
             output_shapes = []
-        setattr(node, 'output_shapes', output_shapes)
-    
+        # setattr(node, 'output_shapes', output_shapes)
+        setattr(list(graph.nodes)[i], 'output_shapes', output_shapes)
+
     return graph
 
 
@@ -94,7 +96,7 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
     for node in graph.nodes:
         setattr(node.next, "node_pass", "forward")
 
-        if hasattr(node, "layer_type"):
+        if getattr(node, "layer_type", None) is not None:
             continue
         
         if node.op == "call_module":
@@ -269,7 +271,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
     """
 
     assert mode == "manual", f"Currently only support manually constructing backward IR graph, got mode: {mode}"
-    if not global_configs.enable_backward_graph_generation:
+    if global_configs.only_forward or not global_configs.enable_backward_graph_generation:
         return None
     
     bw_graph = IRGraph()

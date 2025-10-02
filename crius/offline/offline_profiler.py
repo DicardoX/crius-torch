@@ -239,15 +239,15 @@ class CriusOfflineDataManager:
     @classmethod
     def get_query_key(
         cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
-        comm_group_size: int = 1, comm_data_size: int = 1,
+        layout: str, comm_group_size: int = 1, comm_data_size: int = 1,
     ) -> str:
         """ Generate a unique query key for an operation. """
 
         if op_type == "gemm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif op_type == "reduce_sum":
             assert seq_len is None
-            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
+            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
