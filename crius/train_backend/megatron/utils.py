@@ -2,6 +2,8 @@
 # -*- coding:utf-8 -*-
 # Author: Chunyu Xue
 
+""" Utilities for Megatron backend. """
+
 import os
 import torch
 from megatron.core import parallel_state
@@ -11,14 +13,6 @@ from crius.global_envs import logger
 __all__ = [
     "initialize_distributed",
 ]
-
-
-def initialize():
-    """ Initialize the Megatron backend. 
-    
-    This function is used to initialize the Megatron backend for distributed training.
-    """
-    
 
 
 def initialize_distributed(tensor_model_parallel_size = 1, pipeline_model_parallel_size = 1):

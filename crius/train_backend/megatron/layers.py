@@ -2,6 +2,8 @@
 # -*- coding:utf-8 -*-
 # Author: Chunyu Xue
 
+""" Compilable implementations of Megatron's parallel linear layers. """
+
 import os
 from typing import Optional
 
@@ -9,10 +11,9 @@ import torch
 from torch.nn.parameter import Parameter
 from megatron.core import mpu
 
-from crius.global_envs import logger
-
 __all__ = [
     "ColumnParallelLinear",
+    "RowParallelLinear",
 ]
 
 

@@ -2,7 +2,7 @@
 # -*- coding:utf-8 -*-
 # Author: Chunyu Xue
 
-""" Utility functions for model parallelism. """
+""" Utilities for model parallelism. """
 
 from typing import Dict, List, Optional
 from dataclasses import dataclass
