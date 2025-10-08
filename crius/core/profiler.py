@@ -7,7 +7,7 @@
 This module is independent to the underlying training backend (e.g., Megatron).
 """
 
-from typing import (Any, Tuple, Optional, List, Callable)
+from typing import (Any, Tuple, Optional, List, Callable, Dict)
 import numpy as np
 import pickle
 
@@ -46,6 +46,7 @@ class CriusDistProfiler:
     def profile(
         self, model: nn.Module, 
         base_input_args: Tuple[Any],
+        base_input_kwargs: Dict[str, Any],
         parallelism_plan: ParallelismPlan,
         only_forward: bool = False,
     ) -> Optional[float]:
@@ -54,6 +55,7 @@ class CriusDistProfiler:
         Args:
             model: Torch-like model to be profiled.
             base_input_args: Input arguments of model `.forward()` for IR graph transformation.
+            base_input_kwargs: Input keyword arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
             only_forward: If True, only profile the forward pass. Default is False.
         
@@ -64,6 +66,7 @@ class CriusDistProfiler:
         # Step 1. Compile the model into IR graph
         compile_configs = CompileConfigs(
             base_input_args=base_input_args,
+            base_input_kwargs=base_input_kwargs,
             parallelism_plan=parallelism_plan,
         )
         graph, bw_graph = compile(model, compile_configs)

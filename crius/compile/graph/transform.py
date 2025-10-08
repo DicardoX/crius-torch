@@ -27,15 +27,23 @@ __all__ = [
 def transform_to_ir_graph(
     model: nn.Module,
     *input_args,
+    **input_kwargs,
 ) -> Tuple[IRGraph]:
     """ Transform model into IR graph, tracing with Python-level JIT compiler. 
     
     Args:
         model: Torch-like model to be compiled.
         input_args: Model input arguments.
+        input_kwargs: Model input keyword arguments.
     """
 
-    fx_module = dynamo.export(model)(*input_args)[0]
+    for k, v in input_kwargs.items():
+        print(f"Input kwarg: {k}, {v}")
+
+    fx_module = dynamo.export(model)(*input_args, **input_kwargs)[0]
+    
+    exit(0)
+    
     fx_graph = fx_module.graph
     # Construct IR graph
     graph = IRGraph(fx_graph.owning_module)

@@ -4,9 +4,20 @@
 
 """ Compilable implementations of Megatron's transformer layers. """
 
+from typing import Any, Dict, Optional, Union
+
+import torch
+from torch import Tensor
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_layer import BaseTransformerLayer
 from megatron.core.transformer.transformer_config import TransformerConfig
+# from megatron.core.transformer.torch_norm import WrappedTorchNorm
+from megatron.core.transformer.torch_layer_norm import WrappedTorchLayerNorm
+from megatron.core.utils import make_viewless_tensor
+
+from crius.train_backend.megatron.attention import SelfAttention
+
+__all__ = [ "TransformerLayer", ]
 
 
 class TransformerLayer(MegatronModule, BaseTransformerLayer):
@@ -19,20 +30,21 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
     def __init__(
         self, 
         config: TransformerConfig, 
+        layer_number: Optional[int] = None,
     ) -> None:
         super().__init__(config=config)
 
+        self.layer_number = layer_number
+
         # [Module 1: Input Layernorm] Optional Layernorm on the input data
+        self.input_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
 
         # [Module 2: SelfAttention]
+        self.self_attention = SelfAttention(config, layer_number)
 
         # [Module 3: BiasDropoutFusion]
 
         # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
-
-        # [Module 5: CrossAttention]
-
-        # [Module 6: BiasDropoutFusion]
 
         # [Module 7: Pre MLP] Optional Layernorm before MLP
 
@@ -40,4 +52,106 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # [Module 9: BiasDropoutFusion]
 
-        raise NotImplementedError("TransformerLayer is not implemented yet.")
+    def forward(self, *args, **kwargs):
+        """ Forward method for compilation. 
+        
+        This method calls the core computation of a transformer layer, including
+        self-attention, cross-attention (if applicable), and feed-forward operations.
+        """
+        hidden_states, context = self._forward_attention(*args, **kwargs)
+        output = self._forward_mlp(hidden_states)
+        return output, context
+
+    def _forward_attention(
+        self,
+        hidden_states: Tensor,
+        attention_mask: Optional[Tensor] = None,
+        context: Optional[Tensor] = None,
+        context_mask: Optional[Tensor] = None,
+        rotary_pos_emb: Optional[Tensor] = None,
+        rotary_pos_cos: Optional[Tensor] = None,
+        rotary_pos_sin: Optional[Tensor] = None,
+        rotary_pos_cos_sin: Optional[Tensor] = None,
+        attention_bias: Optional[Tensor] = None,
+    ):
+        """
+        Perform a forward pass through the attention layer and the layernorms before and after
+        the attention operations.
+
+        Args:
+            hidden_states (Tensor): Input tensor of shape [s, b, h] where s is sequence length,
+                b is batch size, and h is hidden size.
+            attention_mask (Tensor): Mask tensor for self-attention.
+            context (Tensor, optional): Context tensor for cross-attention.
+            context_mask (Tensor, optional): Mask tensor for cross-attention.
+            rotary_pos_emb (Tensor, optional): Rotary positional embeddings.
+            rotary_pos_cos (Optional[Tensor]): Rotary embedding cosine.
+            rotary_pos_sin (Optional[Tensor]): Rotary embedding sine.
+            rotary_pos_cos_sin (Optional[Tensor]): Combined rotary embedding cosine and sine.
+            Currently used exclusively for inference with dynamic batching and flashinfer RoPE.
+            attention_bias (Tensor, optional): Bias tensor for Q * K.T.
+
+        Returns:
+            Tuple[Tensor, Tensor]: A tuple containing:
+                hidden_states (Tensor): Transformed hidden states before the MLP layernorm.
+                context (Tensor): Updated context tensor if cross-attention is used,
+                otherwise None.
+        """
+
+        # Residual connection.
+        residual = hidden_states
+
+        # Optional Input Layer norm
+        input_layernorm_output = self.input_layernorm(hidden_states)
+
+        return hidden_states, None
+
+        # # Self attention
+        # attention_output_with_bias = self.self_attention(
+        #     input_layernorm_output,
+        #     attention_mask=attention_mask,
+        #     rotary_pos_emb=rotary_pos_emb,
+        #     rotary_pos_cos=rotary_pos_cos,
+        #     rotary_pos_sin=rotary_pos_sin,
+        #     rotary_pos_cos_sin=rotary_pos_cos_sin,
+        #     attention_bias=attention_bias,
+        # )
+
+        # return attention_output_with_bias, None
+
+    def _forward_mlp(
+        self,
+        hidden_states: Tensor,
+    ) -> Tensor:
+        """
+        Perform a forward pass through the MLP layer and the layernorms before and after
+        the MLP operations.
+
+        Args:
+            hidden_states (Tensor): Input tensor of shape [s, b, h] where s is sequence length,
+                b is batch size, and h is hidden size.
+
+        Returns:
+            Tensor: Transformed hidden states after the MLP layernorm.
+        """
+
+        # Residual connection.
+        residual = hidden_states
+
+        # Optional Pre MLP Layer norm
+
+        # MLP block
+    
+        # Jit compiled function creates 'view' tensor. This tensor
+        # potentially gets saved in the MPU checkpoint function context,
+        # which rejects view tensors. While making a viewless tensor here
+        # won't result in memory savings (like the data loader, or
+        # p2p_communication), it serves to document the origin of this
+        # 'view' tensor.
+        # output = make_viewless_tensor(
+        #     inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
+        # )
+        # NOTE: Disable viewless tensor to be compatible with compilation
+        output = hidden_states
+
+        return output

@@ -235,6 +235,8 @@ class TorchModelProfileTest(unittest.TestCase):
 
         from crius.train_backend.megatron.utils import initialize_distributed
         from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+        from crius.train_backend.megatron.transformer_layer import TransformerLayer
+        from crius.train_backend.megatron.gpt_model import GPTModel
 
         class MegatronToyLayer(MegatronModule):
             # TODO(chunyu): Replace nn.Linear with Megatron's tensor parallelized linear layer.
@@ -302,10 +304,16 @@ class TorchModelProfileTest(unittest.TestCase):
                 for i in range(self.num_layers):
                     hidden_states = self.layers[i](hidden_states)
                 return self.layer_norm(hidden_states)
-            
-        def model_provider(hidden_size: int, num_layers: int, device: str, dtype: str, megatron_config: Any = None) -> nn.Module:
+        
+        def model_provider(
+            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
+            megatron_config: Any = None, use_toy: bool = False,
+        ) -> nn.Module:
             """ Model provider function. """
-            return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
+            if use_toy:
+                return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
+            else:
+                return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
 
         global_bs = 8
@@ -313,12 +321,15 @@ class TorchModelProfileTest(unittest.TestCase):
         num_micro_batches = 2
         hidden_size = 4096
         num_layers = 4
+        data_dtype = torch.long
         dtype = torch.float16
         device = "cuda"
+        vocab_size = 50000
+        use_toy = False
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -388,6 +399,9 @@ class TorchModelProfileTest(unittest.TestCase):
             params_dtype=dtype,
             pipeline_dtype=dtype,
         )
+        setattr(megatron_config, "max_sequence_length", seq_len)
+        setattr(megatron_config, "vocab_size", vocab_size)
+        setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
 
         # Model
         # _model_loader_class = ShadowModelLoader
@@ -397,9 +411,12 @@ class TorchModelProfileTest(unittest.TestCase):
             model_kwargs={
                 "hidden_size": hidden_size,
                 "num_layers": num_layers,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
                 "device": device,
                 "dtype": dtype,
                 "megatron_config": megatron_config,
+                "use_toy": use_toy,
             },
             device_str=device,
             # fake_device_str=device,
@@ -407,10 +424,27 @@ class TorchModelProfileTest(unittest.TestCase):
         model = model_loader.load()
         
         # Inputs
-        data = [
-            torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
-                for _ in range(num_micro_batches)
-        ]
+        if use_toy:
+            data = [
+                torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
+                    for _ in range(num_micro_batches)
+            ]
+            input_args = (data[0], )
+            input_kwargs = {}
+        else:
+            input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+            position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+            attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=dtype, device=device)
+            decoder_input = None
+            labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+            input_args = ()
+            input_kwargs = {
+                "input_ids": input_ids,
+                "position_ids": position_ids,
+                "attention_mask": attention_mask,
+                "decoder_input": decoder_input,
+                "labels": labels,
+            }
 
         # Profile
         profiler = CriusDistProfiler(
@@ -418,7 +452,8 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         e2e_latency = profiler.profile(
             model=model,
-            base_input_args=(data[0], ),
+            base_input_args=input_args,
+            base_input_kwargs=input_kwargs,
             parallelism_plan=parallelism_plan,
             only_forward=global_configs.only_forward,
         )

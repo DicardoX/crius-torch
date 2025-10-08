@@ -4,7 +4,7 @@
 
 """ Implementation of Torch-like model compiler. """
 
-from typing import (Any, List, Tuple, Callable, Optional)
+from typing import (Any, List, Tuple, Callable, Optional, Dict)
 from dataclasses import dataclass
 
 import torch
@@ -30,6 +30,9 @@ class CompileConfigs:
     base_input_args: Tuple[Any]
     """ Input arguments of model `.forward()` for IR graph transformation. """
 
+    base_input_kwargs: Dict[str, Any]
+    """ Input keyword arguments of model `.forward()` for IR graph transformation. """
+
     parallelism_plan: ParallelismPlan
     """ Parallelism plan of the model. """
 
@@ -46,7 +49,7 @@ def compile(
     """
     
     # Step 1. Transform model into IR graph
-    graph = transform_to_ir_graph(model, *compile_configs.base_input_args)
+    graph = transform_to_ir_graph(model, *compile_configs.base_input_args, **compile_configs.base_input_kwargs)
     # Step 2. Propagate per-node input/output shapes
     graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
     graph = infer_node_layer_types(graph)
