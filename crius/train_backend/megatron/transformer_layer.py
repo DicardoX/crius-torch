@@ -14,6 +14,7 @@ from megatron.core.transformer.transformer_config import TransformerConfig
 # from megatron.core.transformer.torch_norm import WrappedTorchNorm
 from megatron.core.transformer.torch_layer_norm import WrappedTorchLayerNorm
 from megatron.core.utils import make_viewless_tensor
+from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 
 from crius.train_backend.megatron.attention import SelfAttention
 
@@ -31,10 +32,12 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         self, 
         config: TransformerConfig, 
         layer_number: Optional[int] = None,
+        hidden_dropout: Optional[float] = None,
     ) -> None:
         super().__init__(config=config)
 
         self.layer_number = layer_number
+        self.hidden_dropout = config.hidden_dropout if hidden_dropout is None else hidden_dropout
 
         # [Module 1: Input Layernorm] Optional Layernorm on the input data
         self.input_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
@@ -43,6 +46,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         self.self_attention = SelfAttention(config, layer_number)
 
         # [Module 3: BiasDropoutFusion]
+        self.self_attn_bda = get_bias_dropout_add
 
         # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
 
@@ -51,6 +55,8 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # [Module 8: MLP block]
 
         # [Module 9: BiasDropoutFusion]
+
+        self.bias_dropout_add_exec_handler = torch.enable_grad
 
     def forward(self, *args, **kwargs):
         """ Forward method for compilation. 
@@ -104,20 +110,23 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # Optional Input Layer norm
         input_layernorm_output = self.input_layernorm(hidden_states)
 
+        # Self attention
+        attention_output_with_bias = self.self_attention(
+            input_layernorm_output,
+            attention_mask=attention_mask,
+            rotary_pos_emb=rotary_pos_emb,
+            rotary_pos_cos=rotary_pos_cos,
+            rotary_pos_sin=rotary_pos_sin,
+            rotary_pos_cos_sin=rotary_pos_cos_sin,
+            attention_bias=attention_bias,
+        )
+
+        with self.bias_dropout_add_exec_handler():
+            hidden_states = self.self_attn_bda(self.training, self.config.bias_dropout_fusion)(
+                attention_output_with_bias, residual, self.hidden_dropout
+            )
+
         return hidden_states, None
-
-        # # Self attention
-        # attention_output_with_bias = self.self_attention(
-        #     input_layernorm_output,
-        #     attention_mask=attention_mask,
-        #     rotary_pos_emb=rotary_pos_emb,
-        #     rotary_pos_cos=rotary_pos_cos,
-        #     rotary_pos_sin=rotary_pos_sin,
-        #     rotary_pos_cos_sin=rotary_pos_cos_sin,
-        #     attention_bias=attention_bias,
-        # )
-
-        # return attention_output_with_bias, None
 
     def _forward_mlp(
         self,
@@ -134,6 +143,8 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         Returns:
             Tensor: Transformed hidden states after the MLP layernorm.
         """
+
+        # TODO(chunyu): Implement compilable MLP block.
 
         # Residual connection.
         residual = hidden_states

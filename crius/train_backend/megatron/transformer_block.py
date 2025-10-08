@@ -111,8 +111,6 @@ class TransformerBlock(MegatronModule):
             # See set_input_tensor()
             hidden_states = self.input_tensor
         
-        return hidden_states
-        
         # Viewless tensor.
         # - We only need to create a viewless tensor in the case of micro batch
         #   size (mbs) == 1, since in this case, 'hidden_states.transpose()'

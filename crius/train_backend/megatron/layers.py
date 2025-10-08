@@ -150,7 +150,7 @@ class ColumnParallelLinear(torch.nn.Module):
 class RowParallelLinear(torch.nn.Module):
     """ Compilable version of Megatron's RowParallelLinear. """
 
-    def __init__(self, input_size, output_size, tp_size, bias, device, dtype, skip_bias_add=False, **kwargs):
+    def __init__(self, input_size, output_size, tp_size, bias, device, dtype, input_is_parallel=False, skip_bias_add=False, **kwargs):
         super(RowParallelLinear, self).__init__()
 
         # Keep input parameters
@@ -160,6 +160,7 @@ class RowParallelLinear(torch.nn.Module):
         self.input_size_per_partition = input_size // tp_size
         self.device = device
         self.dtype = dtype
+        self.input_is_parallel = input_is_parallel
         self.skip_bias_add = skip_bias_add
 
         self.weight = Parameter(
@@ -182,30 +183,25 @@ class RowParallelLinear(torch.nn.Module):
         else:
             self.register_parameter("bias", None)
     
-    def forward(
-        self,
-        input_: torch.Tensor,
-        weight: Optional[torch.Tensor] = None,
-    ):
+    def forward(self, input_: torch.Tensor):
         """ Forward of RowParallelLinear. """
 
-        if weight is None:
-            if self.weight is None:
-                raise RuntimeError(
-                    "weight was not supplied to ColumnParallelLinear forward pass "
-                    "and skip_weight_param_allocation is True."
-                )
-            weight = self.weight
+        # Set up backprop all-reduce.
+        if self.input_is_parallel:
+            input_parallel = input_
         else:
-            pass    # Skip shape check
+            assert not self.sequence_parallel
+            # TODO(chunyu): Add the autograd function for scatter_to_tensor_model_parallel_region() here.
+            # input_parallel = scatter_to_tensor_model_parallel_region(input_, group=self.tp_group)
+            raise NotImplementedError
+        
+        # Matrix multiply.
+        allreduce_dgrad = False
 
-        # TODO(chunyu): Add the autograd function for scatter_to_tensor_model_parallel_region() here.
-        input_parallel = input_
-
-        if not weight.requires_grad:
+        if not self.weight.requires_grad:
             raise NotImplementedError
         else:
-            output_parallel = linear_with_grad_accumulation_and_async_allreduce(input_parallel, weight, bias=None)
+            output_parallel = linear_with_grad_accumulation_and_async_allreduce(input_parallel, self.weight, bias=None)
         
         torch.distributed.all_reduce(output_parallel.contiguous(), group=mpu.get_tensor_model_parallel_group())
         output_ = output_parallel

@@ -201,10 +201,6 @@ class GPTModel(LanguageModule):
         if not self.post_process:
             return hidden_states
         
-        hidden_states = hidden_states.transpose(0, 1).contiguous()
-
-        return hidden_states
-        
         logits, _ = self.output_layer(hidden_states, weight=output_weight, runtime_gather_output=runtime_gather_output)
 
         if labels is None:
@@ -252,10 +248,10 @@ class GPTModel(LanguageModule):
         # [b s] => [s b]
         labels = labels.transpose(0, 1).contiguous()
         # [s, b, vocab] -> [s, vocab, b]
-        logits = logits.transpose(1, 2).contiguous()
+        logits = logits.transpose(1, 2).contiguous()    
         torch_loss_func = torch.nn.CrossEntropyLoss()
         loss = torch_loss_func(logits, labels)
 
         # [s b] => [b, s]
-        loss = loss.transpose(0, 1).contiguous()
+        # loss = loss.transpose(0, 1).contiguous()
         return loss        
