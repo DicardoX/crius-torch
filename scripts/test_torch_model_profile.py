@@ -335,7 +335,7 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.enable_backward_graph_generation = True
 
         # Parallelism plan
-        # op_to_layer_mapping = {
+        # op_to_layer_mapping = {           # FIXME(chunyu): Currently this manual mapping remains legacy and not supported...
         #     'L__self___layers_0_fc1': 0,
         #     'L__self___layers_0_fc2': 0,
         #     'L__self___layers_1_fc1': 1,

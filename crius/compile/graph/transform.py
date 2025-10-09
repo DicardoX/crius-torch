@@ -62,8 +62,6 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
     ShapeProp(graph.owning_module).propagate(*all_args)
     graph_ = graph.owning_module.graph
     for i, node in enumerate(graph_.nodes):
-        print(f"\n ======> Node {i}: {node.target}")
-        
         # Input shapes
         input_shapes = []
         for arg in node.args:
@@ -102,6 +100,9 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
     """
     if graph is None:
         return None
+    
+    # TODO(chunyu): Extend node layers with baddbmm and bmm, add boundary detaction with <built-in function getattr> 
+    # or L__self___module_decoder_layers_0_input_layernorm.
     
     for node in graph.nodes:
         setattr(node.next, "node_pass", "forward")

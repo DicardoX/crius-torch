@@ -75,19 +75,25 @@ class CriusDistProfiler:
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
         logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
+            prefix_str_, suffix_str_ = "", ""
+            if node.layer_type in ("gemm", "reduce_sum", 
+                                       "all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
+                prefix_str_ = "\033[1;37;42m------> [DOMINANT] "
+                suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
-            logger.debug(f"=====> Node target: {node.target} | " + 
+            logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
                          f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                          f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-                         f"Latency: {latency} | Layout: {node.layout}\n")
+                         f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
         if bw_graph is not None:
             logger.debug("\n\n============> Backward graph")
+            prefix_str_, suffix_str_ = "", ""
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
-                logger.debug(f"=====> Node target: {node.target} | " + 
+                logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
                              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-                             f"Latency: {latency} | Layout: {node.layout}\n")
+                             f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
