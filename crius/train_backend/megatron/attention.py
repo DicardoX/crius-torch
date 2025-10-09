@@ -25,7 +25,7 @@ __all__ = [ "SelfAttention", ]
 
 
 class SelfAttention(MegatronModule):
-    """ Self-attention layer with static submodules for compilation.
+    """ Self-attention module with static submodules for compilation.
 
     Args:
         config: Transformer configuration in Megatron.

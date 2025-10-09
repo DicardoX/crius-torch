@@ -17,6 +17,7 @@ from megatron.core.utils import make_viewless_tensor
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 
 from crius.train_backend.megatron.attention import SelfAttention
+from crius.train_backend.megatron.mlp import MLP
 
 __all__ = [ "TransformerLayer", ]
 
@@ -48,13 +49,14 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # [Module 3: BiasDropoutFusion]
         self.self_attn_bda = get_bias_dropout_add
 
-        # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
-
         # [Module 7: Pre MLP] Optional Layernorm before MLP
+        self.pre_mlp_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
 
         # [Module 8: MLP block]
+        self.mlp = MLP(config)
 
         # [Module 9: BiasDropoutFusion]
+        self.mlp_bda = get_bias_dropout_add
 
         self.bias_dropout_add_exec_handler = torch.enable_grad
 
@@ -144,14 +146,19 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             Tensor: Transformed hidden states after the MLP layernorm.
         """
 
-        # TODO(chunyu): Implement compilable MLP block.
-
         # Residual connection.
         residual = hidden_states
 
         # Optional Pre MLP Layer norm
+        pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
 
         # MLP block
+        mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
+
+        with self.bias_dropout_add_exec_handler():
+            hidden_states = self.mlp_bda(self.training, self.config.bias_dropout_fusion)(
+                mlp_output_with_bias, residual, self.hidden_dropout
+            )
     
         # Jit compiled function creates 'view' tensor. This tensor
         # potentially gets saved in the MPU checkpoint function context,
@@ -159,10 +166,8 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # won't result in memory savings (like the data loader, or
         # p2p_communication), it serves to document the origin of this
         # 'view' tensor.
-        # output = make_viewless_tensor(
-        #     inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
-        # )
-        # NOTE: Disable viewless tensor to be compatible with compilation
-        output = hidden_states
+        output = make_viewless_tensor(
+            inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
+        )
 
         return output
