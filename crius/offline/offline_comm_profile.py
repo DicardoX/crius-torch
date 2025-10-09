@@ -55,27 +55,32 @@ class CommunicationProfiler:
         for tensor_size in tensor_sizes: 
             all_reduce_latency_ms = self.profile_all_reduce(tensor_size)
 
-            query_key = OfflineDataRecorder.get_query_key("All_Reduce", tp_degree, tensor_size)
-            recorder._check_cache(query_key, "All_Reduce", tp_degree, tensor_size)
+            if self.rank == 0:
+                query_key = OfflineDataRecorder.get_query_key("All_Reduce", tp_degree, tensor_size)
+                recorder._check_cache(query_key, "All_Reduce", tp_degree, tensor_size)
 
             # Reset
             gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
-            recorder._write_one_entry(query_key, all_reduce_latency_ms, None)
+            if self.rank == 0:
+                recorder._write_one_entry(query_key, all_reduce_latency_ms, None)
 
         for tensor_size in tensor_sizes:
             all_gather_latency_ms = self.profile_all_gather(tensor_size)
-            query_key = OfflineDataRecorder.get_query_key("All_Gather", tp_degree, tensor_size)
-            recorder._check_cache(query_key, "All_Gather", tp_degree, tensor_size)
+
+            if self.rank == 0:
+                query_key = OfflineDataRecorder.get_query_key("All_Gather", tp_degree, tensor_size)
+                recorder._check_cache(query_key, "All_Gather", tp_degree, tensor_size)
 
             # Reset
             gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
-            recorder._write_one_entry(query_key, all_gather_latency_ms, None)
+            if self.rank == 0:
+                recorder._write_one_entry(query_key, all_gather_latency_ms, None)
 
         recorder._store()
 
@@ -87,8 +92,8 @@ class CommunicationProfiler:
 
 
 if __name__ == "__main__":
-    rank = int(os.environ["LOCAL_RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    rank = int(os.environ["LOCAL_RANK"])
 
     profiler = CommunicationProfiler(world_size, rank)
 

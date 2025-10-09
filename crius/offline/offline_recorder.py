@@ -9,11 +9,13 @@ class OfflineDataRecorder:
     def __init__(
         self,
         to_store_path: str = "./crius/offline",
-        data_filename: str = "prof_data.pkl"
+        data_filename: str = "prof_data.pkl",
+        force_overwrite: bool = True
     ):
         self.to_store_path = to_store_path
         self.filename = data_filename
         self._path = os.path.join(self.to_store_path, self.filename)
+        self.force_overwrite = force_overwrite
         if not os.path.exists(to_store_path):
             os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
             logger.warning(f"Created directory for profiling data:{os.path.dirname(to_store_path)}")
@@ -32,17 +34,53 @@ class OfflineDataRecorder:
             with open(self._path, 'rb') as f:
                 self.data = pickle.load(f)
 
-    def _check_cache(self, query_key, op_type, tp_degree, data_size):        
-        # if query_key in self.data and not self.configs.force_overwrite:
-        #     logger.info(f"Cached {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")
-        #     return
-            
-        logger.info(f"=========> {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")       
+    @overload
+    def _check_cache(
+        self, 
+        query_key: str, 
+        op_type: str, 
+        batch_size: int, 
+        seq_len: int, 
+        left_hidden_dim: int, 
+        right_hidden_dim: int
+    ) -> None: ...
+
+    @overload
+    def _check_cache(
+        self, 
+        query_key: str, 
+        op_type: str, 
+        tp_degree: int, 
+        data_size: int
+    ) -> None: ...    
+
+    def _check_cache(self, query_key, op_type, *args, **kwargs) -> None: 
+        if len(args) == 4:   
+
+            batch_size, seq_len, left_hidden_dim, right_hidden_dim = args  
+
+            if query_key in self.data and not self.force_overwrite:
+                logger.info(f"Cached GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
+                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}")
+                return
+                
+            logger.info(f"=========> GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
+                                    f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}")
+                 
+        elif len(args) == 2:       
+            if query_key in self.data and not self.force_overwrite:
+                
+                tp_degree, data_size = args
+
+                logger.info(f"Cached {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")
+                return
+                
+            logger.info(f"=========> {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")    
     
     def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
         """ Write a single profiling entry to the data store. """
-        # if key in self.data and not self.configs.force_overwrite:
-        #     raise ValueError(f"Key {key} already exists in the profiling data.")
+        if key in self.data and not self.force_overwrite:
+            raise ValueError(f"Key {key} already exists in the profiling data.")
         
         self.data[key] = {
             "latency_ms": latency_ms,

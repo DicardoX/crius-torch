@@ -101,12 +101,12 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
-            data_filename='prof_data.pkl',
+            # to_store_path='./crius/offline/',
+            # data_filename='prof_data.pkl',
         )
         
-        # offline_profiler.profile_all_gemm()
-        offline_profiler.profile_all_comm()
+        offline_profiler.profile_all_gemm()
+        # offline_profiler.profile_all_comm()
 
     @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
