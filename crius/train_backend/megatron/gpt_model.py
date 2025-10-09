@@ -148,6 +148,10 @@ class GPTModel(LanguageModule):
             # decoder will get hidden_states from encoder.input_tensor
             decoder_input = None
         
+        # Convert to params_dtype
+        if decoder_input is not None and decoder_input.dtype != self.config.params_dtype:
+            decoder_input = decoder_input.to(self.config.params_dtype)
+
         return decoder_input
 
     def forward(

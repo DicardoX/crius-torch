@@ -24,11 +24,7 @@ __all__ = [
 ]
 
 
-def transform_to_ir_graph(
-    model: nn.Module,
-    *input_args,
-    **input_kwargs,
-) -> Tuple[IRGraph]:
+def transform_to_ir_graph(model: nn.Module, *input_args, **input_kwargs) -> Tuple[IRGraph]:
     """ Transform model into IR graph, tracing with Python-level JIT compiler. 
     
     Args:
@@ -37,13 +33,7 @@ def transform_to_ir_graph(
         input_kwargs: Model input keyword arguments.
     """
 
-    for k, v in input_kwargs.items():
-        print(f"Input kwarg: {k}, {v}")
-
     fx_module = dynamo.export(model)(*input_args, **input_kwargs)[0]
-    
-    exit(0)
-    
     fx_graph = fx_module.graph
     # Construct IR graph
     graph = IRGraph(fx_graph.owning_module)
@@ -53,21 +43,26 @@ def transform_to_ir_graph(
     return graph
 
 
-def propagate_node_shapes(graph: Optional[IRGraph], *input_args) -> IRGraph:
+def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs) -> IRGraph:
     """ Propagate per-node input/output shapes in the IR graph. 
     
     Args:
         graph: IR graph to propagate shapes.
         input_args: Input arguments of the model `.forward()` for shape propagation.
+        input_kwargs: Input keyword arguments of the model `.forward()` for shape propagation.
     """
     if graph is None:
         return None
     
     from torch.fx.passes.shape_prop import ShapeProp
     
-    ShapeProp(graph.owning_module).propagate(*input_args)
+    # .propagate() only takes positional args
+    all_args = (*input_args, *input_kwargs.values())
+    ShapeProp(graph.owning_module).propagate(*all_args)
     graph_ = graph.owning_module.graph
     for i, node in enumerate(graph_.nodes):
+        print(f"\n ======> Node {i}: {node.target}")
+        
         # Input shapes
         input_shapes = []
         for arg in node.args:

@@ -51,7 +51,7 @@ def compile(
     # Step 1. Transform model into IR graph
     graph = transform_to_ir_graph(model, *compile_configs.base_input_args, **compile_configs.base_input_kwargs)
     # Step 2. Propagate per-node input/output shapes
-    graph = propagate_node_shapes(graph, *compile_configs.base_input_args)
+    graph = propagate_node_shapes(graph, *compile_configs.base_input_args, **compile_configs.base_input_kwargs)
     graph = infer_node_layer_types(graph)
     # Step 3. Insert communication primitives
     graph = insert_comm_primitives_into_graph(graph, compile_configs.parallelism_plan, forward_pass=True)

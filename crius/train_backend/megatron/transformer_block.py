@@ -31,6 +31,7 @@ class TransformerBlock(MegatronModule):
         post_process: bool = True,
     ):
         super().__init__(config=config)
+        self.config = config
         self.post_layer_norm = post_layer_norm
         self.pre_process = pre_process
         self.post_process = post_process
@@ -48,7 +49,10 @@ class TransformerBlock(MegatronModule):
         # In pipeline parallelism, we want to add this LN only to the last stage of the pipeline
         # self.post_process and self.post_layer_norm guide this behavior
         if self.post_process and self.post_layer_norm:
-            self.final_layernorm = WrappedTorchLayerNorm(self.config, self.config.hidden_size, eps=self.config.layernorm_epsilon)
+            # self.final_layernorm = WrappedTorchLayerNorm(self.config, self.config.hidden_size, eps=self.config.layernorm_epsilon)
+            self.final_layernorm = self.input_layernorm = torch.nn.LayerNorm(
+                self.config.hidden_size, eps=self.config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=self.config.params_dtype,
+            )
         else:
             self.final_layernorm = None  # Either this or nn.Identity
 

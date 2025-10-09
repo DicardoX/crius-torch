@@ -41,7 +41,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         self.hidden_dropout = config.hidden_dropout if hidden_dropout is None else hidden_dropout
 
         # [Module 1: Input Layernorm] Optional Layernorm on the input data
-        self.input_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
+        # self.input_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
+        self.input_layernorm = torch.nn.LayerNorm(
+            config.hidden_size, eps=config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=config.params_dtype,
+        )
 
         # [Module 2: SelfAttention]
         self.self_attention = SelfAttention(config, layer_number)
@@ -50,7 +53,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         self.self_attn_bda = get_bias_dropout_add
 
         # [Module 7: Pre MLP] Optional Layernorm before MLP
-        self.pre_mlp_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
+        # self.pre_mlp_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
+        self.pre_mlp_layernorm = torch.nn.LayerNorm(
+            config.hidden_size, eps=config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=config.params_dtype,
+        )
 
         # [Module 8: MLP block]
         self.mlp = MLP(config)

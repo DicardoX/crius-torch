@@ -235,6 +235,8 @@ class DotProductAttention(MegatronModule):
         else:
             self.softmax_scale = softmax_scale
 
+        # FIXME(chunyu): This raises error: RuntimeError: masked_fill only supports boolean masks, but got dtype Half
+
         self.scale_mask_softmax = FusedScaleMaskSoftmax(
             input_in_fp16=self.config.fp16,
             input_in_bf16=self.config.bf16,

@@ -398,6 +398,7 @@ class TorchModelProfileTest(unittest.TestCase):
             num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
             params_dtype=dtype,
             pipeline_dtype=dtype,
+            fp16=True,
         )
         setattr(megatron_config, "max_sequence_length", seq_len)
         setattr(megatron_config, "vocab_size", vocab_size)
