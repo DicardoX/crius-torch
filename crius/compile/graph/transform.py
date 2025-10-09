@@ -54,10 +54,11 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
     if graph is None:
         return None
     
-    from torch.fx.passes.shape_prop import ShapeProp
+    from torch.fx.passes.shape_prop import ShapeProp, TensorMetadata
     
     # .propagate() only takes positional args
     all_args = (*input_args, *input_kwargs.values())
+
     ShapeProp(graph.owning_module).propagate(*all_args)
     graph_ = graph.owning_module.graph
     for i, node in enumerate(graph_.nodes):
@@ -67,16 +68,22 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
         input_shapes = []
         for arg in node.args:
             if isinstance(arg, torch.fx.node.Node) and hasattr(arg, 'meta') and 'tensor_meta' in arg.meta:
-                input_shapes.append(arg.meta['tensor_meta'].shape)
+                in_meta = arg.meta['tensor_meta']
+                if not isinstance(in_meta, TensorMetadata):
+                    # Special operators (e.g., getitem), non-negligible latency, thus we directly use the first tensor's shape
+                    logger.warning(f"Node {node.target} has multiple tensor metas, use the first one for input shape.")
+                    in_meta = in_meta[0]       
+                
+                input_shapes.append(in_meta.shape)
         # setattr(node, 'input_shapes', input_shapes)
         setattr(list(graph.nodes)[i], 'input_shapes', input_shapes)
         
         # Output shapes
         if hasattr(node, 'meta') and 'tensor_meta' in node.meta:
-            tensor_meta = node.meta['tensor_meta']
-            if not isinstance(tensor_meta, list):
-                tensor_meta = [tensor_meta]
-            output_shapes = [_meta.shape for _meta in tensor_meta if hasattr(_meta, 'shape')]
+            out_meta = node.meta['tensor_meta']
+            if not isinstance(out_meta, list):
+                out_meta = [out_meta]
+            output_shapes = [_meta.shape for _meta in out_meta if hasattr(_meta, 'shape')]
         else:
             output_shapes = []
         # setattr(node, 'output_shapes', output_shapes)

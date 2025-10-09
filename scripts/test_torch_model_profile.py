@@ -435,7 +435,7 @@ class TorchModelProfileTest(unittest.TestCase):
         else:
             input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
             position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
-            attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=dtype, device=device)
+            attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
             decoder_input = None
             labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
             input_args = ()
