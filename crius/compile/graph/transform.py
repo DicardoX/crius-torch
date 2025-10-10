@@ -248,7 +248,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                 if node.layer_type == comm_primitive:
                     continue    # Just inserted
 
-                assert node.layer_type in ("gemm", "reduce_sum" ), f"Invalid node layer type in backward graph: {node.layer_type}"
+                assert node.layer_type in ("gemm", "reduce_sum", "bmm", "baddbmm", ), f"Invalid node layer type in backward graph: {node.layer_type}"
                 for after_node_keyword in after_nodes:
                     if after_node_keyword not in str(node.target):
                         continue

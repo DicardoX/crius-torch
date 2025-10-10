@@ -330,7 +330,7 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
 
@@ -384,7 +384,8 @@ class TorchModelProfileTest(unittest.TestCase):
             #     "parallelism": 'tp',
             # },
             "all_reduce:dp": {
-                "after_nodes": ['reduce_sum', ],
+                "after_markers": [],
+                "after_nodes": ['weight_grad_reduce_sum', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',
