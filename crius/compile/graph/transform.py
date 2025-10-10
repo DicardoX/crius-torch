@@ -135,14 +135,16 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
                 setattr(node, "layout", "b:s:h1,h1:h2")
             elif (
                 # ------------- String matching rules -------------
-                "bmm" in str(node.target)
-            ):
-                raise NotImplementedError
-            elif (
-                # ------------- String matching rules -------------
                 "baddbmm" in str(node.target)
             ):
-                raise NotImplementedError
+                setattr(node, "layer_type", "baddbmm")
+                setattr(node, "layout", "b:s:s,b:s:h1,b:h1:s")  # e.g., Q @ K^T + attn mask
+            elif (
+                # ------------- String matching rules -------------
+                "bmm" in str(node.target) and "baddbmm" not in str(node.target)
+            ):
+                setattr(node, "layer_type", "bmm")
+                setattr(node, "layout", "b:s:s,b:s:h1")     # e.g., attn score @ V
             else:
                 setattr(node, "layer_type", "unknown_call_function")
                 setattr(node, "layout", None)
@@ -253,7 +255,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
 
                     after_node_num += 1
                     if after_node_num % interval != 0:
-                        continue    # Should not insert here
+                        continue
 
                     if node_pass != "backward":
                         continue
@@ -311,43 +313,104 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             right_hidden_dim = node.input_shapes[1][-1]
 
             # Input gradient: [b, s, h2] x [h2, h1] -> [b, s, h1]
-            def __fake_bw_func_input_grad():
+            def __fake_bw_func_gemm_input_grad():
                 return None
 
-            bw_node_input_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_input_grad)
+            bw_node_input_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_gemm_input_grad)
             input_shapes_ = [torch.Size([batch_size, seq_len, right_hidden_dim]), torch.Size([right_hidden_dim, left_hidden_dim])]
             output_shapes_ = [torch.Size([batch_size, seq_len, left_hidden_dim])]
             setattr(bw_node_input_grad, "node_pass", "backward")
-            setattr(bw_node_input_grad, 'input_shapes', input_shapes_)
-            setattr(bw_node_input_grad, 'output_shapes', output_shapes_)
-            setattr(bw_node_input_grad, 'layer_type', 'gemm')
+            setattr(bw_node_input_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_input_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_input_grad, "layer_type", "gemm")
             setattr(bw_node_input_grad, "layout", "b:s:h2,h2:h1")
 
             # Weight gradient: [b, h1, s] x [b, s, h2] -> [b, h1, h2]
-            def __fake_bw_func_weight_grad():
+            def __fake_bw_func_gemm_weight_grad():
                 return None
             
-            bw_node_weight_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_weight_grad)
+            bw_node_weight_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_gemm_weight_grad)
             input_shapes_ = [torch.Size([batch_size, left_hidden_dim, seq_len]), torch.Size([batch_size, seq_len, right_hidden_dim])]
             output_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
             setattr(bw_node_weight_grad, "node_pass", "backward")
-            setattr(bw_node_weight_grad, 'input_shapes', input_shapes_)
-            setattr(bw_node_weight_grad, 'output_shapes', output_shapes_)
-            setattr(bw_node_weight_grad, 'layer_type', 'gemm')
+            setattr(bw_node_weight_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_weight_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_weight_grad, "layer_type", "gemm")
             setattr(bw_node_weight_grad, "layout", "b:h1:s,b:s:h2")
 
             # Summing weight gradient dim0: [b, h1, h2] -> [h1, h2]
-            def __fake_bw_func_weight_grad_reduce_sum():
+            def __fake_bw_func_gemm_weight_grad_reduce_sum():
                 return None
             
-            bw_node_weight_grad_reduce_sum = bw_graph.create_node(op="call_function", target=__fake_bw_func_weight_grad_reduce_sum)
+            bw_node_weight_grad_reduce_sum = bw_graph.create_node(op="call_function", target=__fake_bw_func_gemm_weight_grad_reduce_sum)
             input_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
             output_shapes_ = [torch.Size([left_hidden_dim, right_hidden_dim])]
             setattr(bw_node_weight_grad_reduce_sum, "node_pass", "backward")
-            setattr(bw_node_weight_grad_reduce_sum, 'input_shapes', input_shapes_)
-            setattr(bw_node_weight_grad_reduce_sum, 'output_shapes', output_shapes_)
-            setattr(bw_node_weight_grad_reduce_sum, 'layer_type', 'reduce_sum')
+            setattr(bw_node_weight_grad_reduce_sum, "input_shapes", input_shapes_)
+            setattr(bw_node_weight_grad_reduce_sum, "output_shapes", output_shapes_)
+            setattr(bw_node_weight_grad_reduce_sum, "layer_type", "reduce_sum")
             setattr(bw_node_weight_grad_reduce_sum, "layout", "b:h1:h2")
+
+        elif node.layer_type == "bmm":  # [b, s, s] x [b, s, h1] -> [b, s, h1]
+            assert len(node.input_shapes[0]) == len(node.input_shapes[1]) == len(node.output_shapes[0]) == 3
+            (batch_size, seq_len, left_hidden_dim) = node.input_shapes[1]
+            
+            # Attn score gradient: [b, s, h1] x [b, h1, s] -> [b, s, s]
+            def __fake_bw_func_bmm_attn_score_grad():
+                return None
+            
+            bw_node_attn_score_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_bmm_attn_score_grad)
+            input_shapes_ = [torch.Size([batch_size, seq_len, left_hidden_dim]), torch.Size([batch_size, left_hidden_dim, seq_len])]
+            output_shapes_ = [torch.Size([batch_size, seq_len, seq_len])]
+            setattr(bw_node_attn_score_grad, "node_pass", "backward")
+            setattr(bw_node_attn_score_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_attn_score_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_attn_score_grad, "layer_type", "bmm")
+            setattr(bw_node_attn_score_grad, "layout", "b:s:h1,b:h1:s")
+
+            # Value tensor gradient: [b, s, s] x [b, s, h1] -> [b, s, h1]
+            def __fake_bw_func_bmm_value_tensor_grad():
+                return None
+            
+            bw_node_value_tensor_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_bmm_value_tensor_grad)
+            input_shapes_ = [torch.Size([batch_size, seq_len, seq_len]), torch.Size([batch_size, seq_len, left_hidden_dim])]
+            output_shapes_ = [torch.Size([batch_size, seq_len, left_hidden_dim])]
+            setattr(bw_node_value_tensor_grad, "node_pass", "backward")
+            setattr(bw_node_value_tensor_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_value_tensor_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_value_tensor_grad, "layer_type", "bmm")
+            setattr(bw_node_value_tensor_grad, "layout", "b:s:s,b:s:h1")
+        
+        elif node.layer_type == "baddbmm":  # [b, s, s] + [b, s, h1] x [b, h1, s] -> [b, s, s]
+            assert len(node.input_shapes) == 3
+            assert len(node.input_shapes[0]) == len(node.input_shapes[1]) == len(node.input_shapes[2]) == len(node.output_shapes[0]) == 3
+            (batch_size, seq_len, left_hidden_dim) = node.input_shapes[1]
+
+            # Query tensor gradient: [b, s, s] x [b, s, h1] -> [b, s, h1]
+            def __fake_bw_func_baddbmm_query_tensor_grad():
+                return None
+            
+            bw_node_query_tensor_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_baddbmm_query_tensor_grad)
+            input_shapes_ = [torch.Size([batch_size, seq_len, seq_len]), torch.Size([batch_size, seq_len, left_hidden_dim])]
+            output_shapes_ = [torch.Size([batch_size, seq_len, left_hidden_dim])]
+            setattr(bw_node_query_tensor_grad, "node_pass", "backward")
+            setattr(bw_node_query_tensor_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_query_tensor_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_query_tensor_grad, "layer_type", "bmm")                 # Backward pass of baddbmm involves bmm
+            setattr(bw_node_query_tensor_grad, "layout", "b:s:s,b:s:h1")
+
+            # Key tensor gradient: [b, h1, s] x [b, s, s] -> [b, h1, s]
+            def __fake_bw_func_baddbmm_key_tensor_grad():
+                return None
+            
+            bw_node_key_tensor_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_baddbmm_key_tensor_grad)
+            input_shapes_ = [torch.Size([batch_size, left_hidden_dim, seq_len]), torch.Size([batch_size, seq_len, seq_len])]
+            output_shapes_ = [torch.Size([batch_size, left_hidden_dim, seq_len])]
+            setattr(bw_node_key_tensor_grad, "node_pass", "backward")
+            setattr(bw_node_key_tensor_grad, "input_shapes", input_shapes_)
+            setattr(bw_node_key_tensor_grad, "output_shapes", output_shapes_)
+            setattr(bw_node_key_tensor_grad, "layer_type", "bmm")
+            setattr(bw_node_key_tensor_grad, "layout", "b:h1:s,b:s:s")
 
         elif node.layer_type == "all_reduce":
             pass    # Directly return out_grad, which are the same across all ranks, as outputs are the same after allreduce in forward

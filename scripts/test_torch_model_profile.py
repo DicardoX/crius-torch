@@ -328,7 +328,7 @@ class TorchModelProfileTest(unittest.TestCase):
         use_toy = False
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
@@ -374,21 +374,21 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
-            "all_reduce:tp": {
-                # "after_nodes": ['fc2', ],
-                # "after_nodes": ['matmul', ],
-                "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
-                "after_nodes": ['contiguous', ],
-                "interval": 1,
-                "pass": 'forward',
-                "parallelism": 'tp',
-            },
-            # "all_reduce:dp": {
-            #     "after_nodes": ['reduce_sum', ],
+            # "all_reduce:tp": {
+            #     # "after_nodes": ['fc2', ],
+            #     # "after_nodes": ['matmul', ],
+            #     "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
+            #     "after_nodes": ['contiguous', ],
             #     "interval": 1,
-            #     "pass": 'backward',
-            #     "parallelism": 'dp',
+            #     "pass": 'forward',
+            #     "parallelism": 'tp',
             # },
+            "all_reduce:dp": {
+                "after_nodes": ['reduce_sum', ],
+                "interval": 1,
+                "pass": 'backward',
+                "parallelism": 'dp',
+            },
         }
 
         # Init distributed

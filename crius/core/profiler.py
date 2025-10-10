@@ -76,9 +76,11 @@ class CriusDistProfiler:
         logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
-            if node.layer_type in ("gemm", "reduce_sum", 
-                                       "all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
-                prefix_str_ = "\033[1;37;42m------> [DOMINANT] "
+            if node.layer_type in (
+                "gemm", "reduce_sum", "bmm", "baddbmm", 
+                "all_reduce", "all_gather", "all_to_all", "reduce_scatter", 
+            ):
+                prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
                 suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
             logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
@@ -128,7 +130,7 @@ class CriusDistProfiler:
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
-                        elif node.layer_type in ("gemm", "reduce_sum", ):
+                        elif node.layer_type in ("gemm", "reduce_sum", "bmm", "baddbmm", ):
                             assert getattr(node, "layout", None) is not None
                             layout = [l.split(":") for l in node.layout.split(",")]
                             batch_size_indices = self._get_one_dim_index("b", layout)
