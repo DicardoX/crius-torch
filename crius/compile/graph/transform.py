@@ -101,8 +101,7 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
     if graph is None:
         return None
     
-    # TODO(chunyu): Extend node layers with baddbmm and bmm, add boundary detaction with <built-in function getattr> 
-    # or L__self___module_decoder_layers_0_input_layernorm.
+    # TODO(chunyu): Extend node layers with baddbmm and bmm
     
     for node in graph.nodes:
         setattr(node.next, "node_pass", "forward")
@@ -190,6 +189,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
             continue
         
         # Traverse the node to insert
+        after_markers = comm_op_insert_rules[comm_primitive_str].get("after_markers", [])
         after_nodes = comm_op_insert_rules[comm_primitive_str].get("after_nodes", [])
         interval = comm_op_insert_rules[comm_primitive_str].get("interval", 1)
         node_pass = comm_op_insert_rules[comm_primitive_str].get("pass", "forward")
@@ -198,17 +198,24 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
 
         if forward_pass:
             # Forward pass
+            cur_marker = None
             for node in graph.nodes:
+                if "L__self___module" in str(node.target):
+                    cur_marker = str(node.target)                
+
                 for after_node_keyword in after_nodes:
                     if after_node_keyword not in str(node.target):
-                        continue
+                        continue    # Node target not matched
 
                     after_node_num += 1
                     if after_node_num % interval != 0:
-                        continue    # Should not insert here
+                        continue    # We insert every `interval` matched nodes
 
                     if node_pass != "forward":
                         continue
+
+                    if all([_marker not in cur_marker for _marker in after_markers]):
+                        continue    # Not belong to any specified marker
 
                     # Check whether the graph already has the comm op node
                     if comm_primitive in str(node.next.target):

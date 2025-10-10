@@ -22,6 +22,9 @@ class ParallelismPlan:
     pipeline_parallel_degree: int = 1
     """ Degree of pipeline parallelism. """
 
+    num_layers: int = 1
+    """ Number of layers in the model. """
+
     num_microbatches: int = 1
     """ Number of microbatches in pipeline parallelism. """
     
@@ -33,6 +36,15 @@ class ParallelismPlan:
 
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'manual', ] """
+
+    pipeline_use_boundary_markers: bool = False
+    """ Whether to use boundary markers to indicate the start and end of a layer in the IR graph. """
+
+    pipeline_boundary_start_marker: List[str] = None
+    """ List of node targets that indicate the start of a layer (e.g., ['getattr', 'input_layernorm', ]). """
+
+    pipeline_boundary_end_marker: List[str] = None
+    """ List of node targets that indicate the end of a layer (e.g., ['dropout', 'add', ]). """
 
     pipeline_num_preprocess_nodes: int = -1
     """ Number of preprocess nodes (e.g., arg0) before the loop of layers (e.g., transformer layers). """
