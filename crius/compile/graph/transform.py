@@ -101,7 +101,7 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
     if graph is None:
         return None
     
-    # TODO(chunyu): Extend node layers with baddbmm and bmm
+    # TODO(chunyu): Extend node layers with baddbmm and bmm, add related nodes in backward graph.
     
     for node in graph.nodes:
         setattr(node.next, "node_pass", "forward")
@@ -133,6 +133,16 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
             ):
                 setattr(node, "layer_type", "gemm")
                 setattr(node, "layout", "b:s:h1,h1:h2")
+            elif (
+                # ------------- String matching rules -------------
+                "bmm" in str(node.target)
+            ):
+                raise NotImplementedError
+            elif (
+                # ------------- String matching rules -------------
+                "baddbmm" in str(node.target)
+            ):
+                raise NotImplementedError
             else:
                 setattr(node, "layer_type", "unknown_call_function")
                 setattr(node, "layout", None)
