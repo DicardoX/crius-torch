@@ -14,6 +14,7 @@ import torch
 from torch import nn
 
 from crius.global_envs import logger
+from crius.offline.offline_recorder import OfflineDataRecorder
 
 __all__ = [
     "OfflineProfileConfigs",
@@ -112,15 +113,15 @@ class CriusOfflineDataManager:
     
         self.configs = profile_configs
 
-        self.to_store_path = to_store_path
-        self.filename = data_filename
-        self._path = os.path.join(self.to_store_path, self.filename)
-        if not os.path.exists(to_store_path):
-            os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
-            logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
+        # self.to_store_path = to_store_path
+        # self.filename = data_filename
+        # self._path = os.path.join(self.to_store_path, self.filename)
+        # if not os.path.exists(to_store_path):
+        #     os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
+        #     logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
         
-        self.data = None
-        self._load()
+        # self.data = None
+        # self._load()
     
     def profile_all_gemm(self) -> None:
         """ Profile all GEMM operators. """
@@ -174,80 +175,103 @@ class CriusOfflineDataManager:
             return op_latency_
 
         # Benchmark loop
+        recorder = OfflineDataRecorder()
+
         for bs in batch_sizes:
             for seq_len in seq_lens:
                 for left_hidden_dim in gemm_left_op_hidden_dims:
                     for right_hidden_dim in gemm_right_op_hidden_dims:
-                        query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        if query_key in self.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                            continue
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
+                        # if query_key in self.data and not self.configs.force_overwrite:
+                        #     logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
+                        #                 f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                        #     continue
                         
-                        logger.info(f"==========> GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                    f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                        # logger.info(f"==========> GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
+                        #             f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                        recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim)
+
                         # Reset
                         gc.collect()
                         torch.cuda.empty_cache()
                         torch.cuda.synchronize()
 
                         op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        self._write_one_entry(query_key, op_latency, None)
+                        # self._write_one_entry(query_key, op_latency, None)
+                        recorder._write_one_entry(query_key, op_latency, None)
         
-        self._store()
+        recorder._store()
     
-    def profile_all_allreduce(self) -> None:
+    def profile_all_comm(self) -> None:
         """ Profile all All-Reduce operators. """
 
-        allreduce_op_type = self.configs.allreduce_op_type
-        comm_data_sizes = self.configs.comm_data_sizes
-        dtype = self.configs.dtype
-        num_warmup_steps = self.configs.num_warmup_steps
-        num_profile_steps = self.configs.num_profile_steps
+        # allreduce_op_type = self.configs.allreduce_op_type
+        # comm_data_sizes = self.configs.comm_data_sizes
+        # dtype = self.configs.dtype
+        # num_warmup_steps = self.configs.num_warmup_steps
+        # num_profile_steps = self.configs.num_profile_steps
 
         # TODO(chunyu): Implementing offline all-reduce profiler...
-        raise NotImplementedError
+        commands = [
+        "torchrun --nnodes=1 --nproc_per_node=2 /app/crius/offline/offline_comm_profile_util.py",
+        "torchrun --nnodes=1 --nproc_per_node=4 /app/crius/offline/offline_comm_profile_util.py", 
+        # "torchrun --nnodes=1 --nproc_per_node=8 /app/crius/offline/offline_comm_profile.py"
+        ]
+        
+        print("Running torchrun tests...")
+        
+        for i, cmd in enumerate(commands, 1):
+            print(f"\n{'='*50}")
+            print(f"Running test-{i}/{len(commands)}: {cmd}")
+            print(f"{'='*50}")
+            
+            return_code = os.system(cmd)
+            
+            if return_code == 0:
+                print(f"Test-{i} succeeded")
+            else:
+                print(f"Test-{i} failed (return code: {return_code})")
 
     
-    def _load(self) -> None:
-        """ Load the collected profiling data from the specified path. """        
-        if not os.path.exists(self._path):
-            logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
-            self.data = {}
-            return
+    # def _load(self) -> None:
+    #     """ Load the collected profiling data from the specified path. """        
+    #     if not os.path.exists(self._path):
+    #         logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
+    #         self.data = {}
+    #         return
         
-        if self.data is None:
-            with open(self._path, 'rb') as f:
-                self.data = pickle.load(f)
+    #     if self.data is None:
+    #         with open(self._path, 'rb') as f:
+    #             self.data = pickle.load(f)
     
-    def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
-        """ Write a single profiling entry to the data store. """
-        if key in self.data and not self.configs.force_overwrite:
-            raise ValueError(f"Key {key} already exists in the profiling data.")
+    # def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
+    #     """ Write a single profiling entry to the data store. """
+    #     if key in self.data and not self.configs.force_overwrite:
+    #         raise ValueError(f"Key {key} already exists in the profiling data.")
         
-        self.data[key] = {
-            "latency_ms": latency_ms,
-            "memory_footprint_mb": memory_footprint_mb,
-        }
+    #     self.data[key] = {
+    #         "latency_ms": latency_ms,
+    #         "memory_footprint_mb": memory_footprint_mb,
+    #     }
 
-    def _store(self) -> None:
-        """ Store the collected profiling data to the specified path. """
-        with open(self._path, 'wb') as f:
-            pickle.dump(self.data, f)
-        logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
+    # def _store(self) -> None:
+    #     """ Store the collected profiling data to the specified path. """
+    #     with open(self._path, 'wb') as f:
+    #         pickle.dump(self.data, f)
+    #     logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
 
-    @classmethod
-    def get_query_key(
-        cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
-        layout: str, comm_group_size: int = 1, comm_data_size: int = 1,
-    ) -> str:
-        """ Generate a unique query key for an operation. """
+    # @classmethod
+    # def get_query_key(
+    #     cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+    #     layout: str, comm_group_size: int = 1, comm_data_size: int = 1,
+    # ) -> str:
+    #     """ Generate a unique query key for an operation. """
 
-        if op_type == "gemm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "reduce_sum":
-            assert seq_len is None
-            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
-            assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
+    #     if op_type == "gemm":
+    #         return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+    #     elif op_type == "reduce_sum":
+    #         assert seq_len is None
+    #         return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+    #     elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+    #         assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
+    #         return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
