@@ -17,7 +17,7 @@ from torch import nn
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
-from crius.offline.offline_profiler import CriusOfflineDataManager
+from crius.offline.offline_recorder import OfflineDataRecorder
 from crius.global_envs import logger, global_configs
 
 
@@ -73,7 +73,7 @@ class CriusDistProfiler:
 
         # Step 2. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
-        logger.debug("\n\n============> Forward graph")
+        # logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
             if node.layer_type in (
@@ -83,19 +83,19 @@ class CriusDistProfiler:
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
                 suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
-            logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-                         f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
-                         f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-                         f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+            # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
+            #              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+            #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+            #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
         if bw_graph is not None:
-            logger.debug("\n\n============> Backward graph")
+            # logger.debug("\n\n============> Backward graph")
             prefix_str_, suffix_str_ = "", ""
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
-                logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-                             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
-                             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-                             f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+                # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
+                #              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
@@ -133,9 +133,9 @@ class CriusDistProfiler:
                         elif node.layer_type in ("gemm", "reduce_sum", "bmm", "baddbmm", ):
                             assert getattr(node, "layout", None) is not None
                             layout = [l.split(":") for l in node.layout.split(",")]
-                            batch_size_indices = self._get_one_dim_index("b", layout)
-                            seq_len_indices = self._get_one_dim_index("s", layout)
-                            left_op_hidden_dim_indices = self._get_one_dim_index("h1", layout)
+                            batch_size_indices          = self._get_one_dim_index("b", layout)
+                            seq_len_indices             = self._get_one_dim_index("s", layout)
+                            left_op_hidden_dim_indices  = self._get_one_dim_index("h1", layout)
                             right_op_hidden_dim_indices = self._get_one_dim_index("h2", layout)
 
                             batch_size = input_shapes[batch_size_indices[0]][batch_size_indices[1]] \
@@ -150,14 +150,14 @@ class CriusDistProfiler:
                         else:
                             raise ValueError(f"Unsupported node layer type: {node.layer_type}")
                         
-                        query_key = CriusOfflineDataManager.get_query_key(
-                            node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
-                            node.layout, comm_group_size, comm_data_size,
+                        query_key = OfflineDataRecorder.get_query_key(
+                            node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, node.layout,  
+                            comm_group_size, comm_data_size,
                         )
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
                         else:
-                            logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
+                            logger.warning(f"Query key [ {query_key} ] from node {node.target} not found in profiled data, using default latency {node_latency}ms.")
                     
                     setattr(node, "latency", node_latency)
                 else:

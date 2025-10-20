@@ -41,23 +41,23 @@ class CommunicationProfiler:
         return local_latency_ms.item()
 
     def profile_all_reduce(self, tensor_size):
-        tensor = torch.ones(tensor_size, device="cuda")
+        tensor = torch.randn(tensor_size, device="cuda")
         return self.measure_latency(dist.all_reduce, tensor, dist.ReduceOp.SUM)
 
     def profile_all_gather(self, tensor_size):
-        tensor = torch.ones(tensor_size, device="cuda")
+        tensor = torch.randn(tensor_size, device="cuda")
         gather_list = [torch.zeros(tensor_size, device="cuda") for _ in range(self.world_size)]
         return self.measure_latency(dist.all_gather, gather_list, tensor)
 
-    def run_profile(self, tp_degree, tensor_sizes):
+    def run_profile(self, group_size, tensor_sizes):
         recorder = OfflineDataRecorder()
 
         for tensor_size in tensor_sizes: 
             all_reduce_latency_ms = self.profile_all_reduce(tensor_size)
 
             if self.rank == 0:
-                query_key = OfflineDataRecorder.get_query_key("All_Reduce", tp_degree, tensor_size)
-                recorder._check_cache(query_key, "All_Reduce", tp_degree, tensor_size)
+                query_key = OfflineDataRecorder.get_query_key("all_reduce", None, None, None, None, None, group_size, tensor_size)
+                recorder._check_cache(query_key, "all_reduce", group_size, tensor_size)
 
             # Reset
             gc.collect()
@@ -99,11 +99,11 @@ if __name__ == "__main__":
     profiler = CommunicationProfiler(world_size, rank)
 
     tensor_sizes = [
-                1024, 4096, 16384, 65536, 262144,  # QKV
+                1024, 4096, 16384, 65536, 262144, 1572864, 2097152, 8388608,  
 
-                1048576, 4194304, 16777216         # MLP
+                1048576, 4194304, 16777216, 25165824, 25600000, 33554432,      
 
-                # 67108864, 134217728, 268435456     # grad
+                67108864, 134217728, 268435456     
             ]
 
     profiler.run_profile(world_size, tensor_sizes)

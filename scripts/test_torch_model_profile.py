@@ -369,20 +369,20 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
             min_batch_size=1,
-            max_batch_size=4,
+            max_batch_size=1024,
             batch_size_step="power-of-2",
-            min_seq_len=32,
-            max_seq_len=2048,
+            min_seq_len=1,
+            max_seq_len=8,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims=[4096, ],
-            gemm_right_op_hidden_dims=[4096, ],
+            gemm_left_op_hidden_dims =[128, 256, 512, 1024, 1536, 2048, 4096, 8192, 25000],
+            gemm_right_op_hidden_dims=[128, 256, 512, 1024, 1536, 2048, 4096, 8192, 25000],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -398,80 +398,34 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile_all_gemm()
         offline_profiler.profile_all_comm()
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
         """ Profile a naive torch model. """
         
-        # global_bs = 8
-        # seq_len = 2048
-        # num_micro_batches = 2
-        # hidden_size = 4096
-        # num_layers = 4
-        # dtype = torch.float16
-        # device = "cuda"
-        # enable_torch_profiler = False
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 2
+        hidden_size = 4096
+        num_layers = 4
+        dtype = torch.float16
+        device = "cuda"
+        enable_torch_profiler = False
 
         # Model
         # _model_loader_class = ModelLoader
-        # _model_loader_class = ShadowModelLoader
-        # model_loader = _model_loader_class(
-        #     model_provider=model_provider,
-        #     model_kwargs={
-        #         "hidden_size": hidden_size,
-        #         "num_layers": num_layers,
-        #         "device": device,
-        #         "dtype": dtype,
-        #     },
-        #     # device_str=device,
-        #     fake_device_str=device,
-        # )
-        # model = model_loader.load()
-
-        world_size = int(os.environ.get('WORLD_SIZE', 4))
-        rank = int(os.environ.get('RANK', 0))
-        local_rank = int(os.environ.get('LOCAL_RANK', 0))
-        
-        
-        tensor_parallel_size = 2                                                            # TP size
-        pipeline_parallel_size = 1                                                          # PP size
-        data_parallel_size = world_size // (tensor_parallel_size * pipeline_parallel_size)  # DP size
-        
-        # assert world_size % tensor_parallel_size == 0, f"World size {world_size} must be divisible by TP size {tensor_parallel_size}"
-        assert world_size % (tensor_parallel_size * pipeline_parallel_size) == 0,   f"World size {world_size} must be divisible by TP*PP size {tensor_parallel_size * pipeline_parallel_size}"
-        
-        pp_rank, pp_world_size, tp_rank, tp_world_size, dp_rank, dp_world_size = initialize_distributed_and_3d(
-            pipeline_parallel_size=pipeline_parallel_size, 
-            tensor_parallel_size=tensor_parallel_size
+        _model_loader_class = ShadowModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+                "dtype": dtype,
+            },
+            # device_str=device,
+            fake_device_str=device,
         )
-        
-        global_bs = 8
-        seq_len = 2048
-        num_micro_batches = 4
-        hidden_size = 4096
-        num_layers = 8
-        dtype = torch.float16
-        device = f"cuda:{local_rank}"
-        
-        print(f"[Global Rank {rank}] Hybrid DP+TP+PP: DP_rank={dp_rank}/{dp_world_size}, TP_rank={tp_rank}/{tp_world_size}, PP_rank={pp_rank}/{pp_world_size}")
-        
-        config = ModelParallelConfig(
-            tensor_model_parallel_size=tp_world_size,
-            pipeline_model_parallel_size=pp_world_size,
-            pipeline_dtype=dtype,
-        )
-        config.hidden_size = hidden_size
-        config.fp8 = None
-        config.sequence_parallel = False
-        
-        pre_process = (pp_rank == 0)
-        post_process = (pp_rank == pp_world_size - 1)
-        
-        model = model_provider_tp_pp(hidden_size, num_layers, device, dtype, config, 
-                                     pre_process=pre_process, post_process=post_process)
-        
-        print(f"[Global Rank {rank}] Model created with layers {model.start_layer}-{model.end_layer-1}")
-
-        model = DDP(model, device_ids=[local_rank])
+        model = model_loader.load()
         
         # Inputs
         data = [
@@ -497,8 +451,8 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_type="1f1b",
             pipeline_parallel_degree=1,
             num_microbatches=num_micro_batches,
-            tensor_parallel_degree=2,
-            data_parallel_degree=2,
+            tensor_parallel_degree=1,
+            data_parallel_degree=1,
             op_to_layer_mapping=op_to_layer_mapping,
             layer_to_stage_mapping=layer_to_stage_mapping,
         )
@@ -509,7 +463,6 @@ class TorchModelProfileTest(unittest.TestCase):
         e2e_latency = profiler.profile(
             model=model,
             base_input_args=(data[0], ),
-            base_input_kwargs={},
             parallelism_plan=parallelism_plan,
             only_forward=True,
         )
@@ -517,58 +470,58 @@ class TorchModelProfileTest(unittest.TestCase):
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
         ################# Real profiling #################
-        # _model_loader_class = ModelLoader
-        # model_loader = _model_loader_class(
-        #     model_provider=model_provider,
-        #     model_kwargs={
-        #         "hidden_size": hidden_size,
-        #         "num_layers": num_layers,
-        #         "device": device,
-        #         "dtype": dtype,
-        #     },
-        #     device_str=device,
-        # )
-        # model = model_loader.load()
+        _model_loader_class = ModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "device": device,
+                "dtype": dtype,
+            },
+            device_str=device,
+        )
+        model = model_loader.load()
 
-        # # Warmup
-        # for _ in range(100):
-        #     with torch.no_grad():
-        #         _ = model(data[0])
-        # torch.cuda.synchronize(device)
+        # Warmup
+        for _ in range(100):
+            with torch.no_grad():
+                _ = model(data[0])
+        torch.cuda.synchronize(device)
 
-        # if not enable_torch_profiler:     
-        #     start_event = torch.cuda.Event(enable_timing=True)
-        #     end_event = torch.cuda.Event(enable_timing=True)  
-        #     # Measure
-        #     start_event.record()
-        #     for _ in range(1000):
-        #         with torch.no_grad():
-        #             _ = model(data[0])
-        #     end_event.record()    
+        if not enable_torch_profiler:     
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)  
+            # Measure
+            start_event.record()
+            for _ in range(1000):
+                with torch.no_grad():
+                    _ = model(data[0])
+            end_event.record()    
 
-        #     end_event.synchronize()
-        #     total_time_ms = start_event.elapsed_time(end_event)
-        #     avg_latency_ms = total_time_ms / 1000     
-        #     stage_latencies_ms = [avg_latency_ms]
-        #     measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+            end_event.synchronize()
+            total_time_ms = start_event.elapsed_time(end_event)
+            avg_latency_ms = total_time_ms / 1000     
+            stage_latencies_ms = [avg_latency_ms]
+            measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
             
-        #     print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
+            print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
         
-        # else:
-        #     with torch.profiler.profile(
-        #         activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA, ],
-        #         # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-        #         # on_trace_ready=lambda x: x.export_chrome_trace('/app/torch_exec_trace.json'),
-        #         record_shapes=True,
-        #         profile_memory=True,
-        #         with_stack=True,
-        #     ) as prof:
-        #         for _ in range(1):
-        #             with torch.no_grad():
-        #                 _ = model(data[0])
-        #         prof.step()
+        else:
+            with torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA, ],
+                # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                # on_trace_ready=lambda x: x.export_chrome_trace('/app/torch_exec_trace.json'),
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+            ) as prof:
+                for _ in range(1):
+                    with torch.no_grad():
+                        _ = model(data[0])
+                prof.step()
         
-        #     prof.export_chrome_trace('/app/torch_exec_trace.json')
+            prof.export_chrome_trace('/app/torch_exec_trace.json')
 
     @unittest.skip("Pass.")
     def test_megatron_model_profiling(self):
@@ -665,9 +618,9 @@ class TorchModelProfileTest(unittest.TestCase):
 
 
         global_bs = 8
-        seq_len = 2048
+        seq_len = 1024
         num_micro_batches = 2
-        hidden_size = 4096
+        hidden_size = 1024
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
@@ -676,7 +629,7 @@ class TorchModelProfileTest(unittest.TestCase):
         use_toy = False
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 2
         global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 2
         global_configs.only_forward = False
@@ -722,15 +675,15 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
-            # "all_reduce:tp": {
-            #     # "after_nodes": ['fc2', ],
-            #     # "after_nodes": ['matmul', ],
-            #     "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
-            #     "after_nodes": ['contiguous', ],
-            #     "interval": 1,
-            #     "pass": 'forward',
-            #     "parallelism": 'tp',
-            # },
+            "all_reduce:tp": {
+                # "after_nodes": ['fc2', ],
+                # "after_nodes": ['matmul', ],
+                "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
+                "after_nodes": ['contiguous', ],
+                "interval": 1,
+                "pass": 'forward',
+                "parallelism": 'tp',
+            },
             "all_reduce:dp": {
                 "after_markers": [],
                 "after_nodes": ['weight_grad_reduce_sum', ],

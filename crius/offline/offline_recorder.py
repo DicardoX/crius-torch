@@ -42,7 +42,8 @@ class OfflineDataRecorder:
         batch_size: int, 
         seq_len: int, 
         left_hidden_dim: int, 
-        right_hidden_dim: int
+        right_hidden_dim: int,
+        layout: str
     ) -> None: ...
 
     @overload
@@ -50,33 +51,33 @@ class OfflineDataRecorder:
         self, 
         query_key: str, 
         op_type: str, 
-        tp_degree: int, 
+        group_size: int, 
         data_size: int
     ) -> None: ...    
 
     def _check_cache(self, query_key, op_type, *args, **kwargs) -> None: 
-        if len(args) == 4:   
+        if len(args) == 5:   
 
-            batch_size, seq_len, left_hidden_dim, right_hidden_dim = args  
+            batch_size, seq_len, left_hidden_dim, right_hidden_dim, layout = args  
 
             if query_key in self.data and not self.force_overwrite:
                 logger.info(f"Cached GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}")
+                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
                 return
                 
             logger.info(f"=========> GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
-                                    f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}")
+                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
                  
         elif len(args) == 2:       
 
-            tp_degree, data_size = args
+            group_size, data_size = args
             
             if query_key in self.data and not self.force_overwrite:
 
-                logger.info(f"Cached {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")
+                logger.info(f"Cached {op_type} profile: group_size: {group_size}, data_size: {data_size}")
                 return
                 
-            logger.info(f"=========> {op_type} profile: tp_degree: {tp_degree}, data_size: {data_size}")    
+            logger.info(f"=========> {op_type} profile: group_size: {group_size}, data_size: {data_size}")    
     
     def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
         """ Write a single profiling entry to the data store. """
@@ -92,40 +93,31 @@ class OfflineDataRecorder:
         """ Store the collected profiling data to the specified path. """
         with open(self._path, 'wb') as f:
             pickle.dump(self.data, f)
-        logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
-
-    @overload
-    @classmethod
-    def get_query_key(
-        cls, 
-        op_type: str, 
-        batch_size: int, 
-        seq_len: int, 
-        left_op_hidden_dim: int, 
-        right_op_hidden_dim: int
-    ) -> str: ...  
-
-    @overload
-    @classmethod
-    def get_query_key(
-        cls, 
-        op_type: str, 
-        tp_degree: int, 
-        data_size: int
-    ) -> str: ...  
+        logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}") 
     
     @classmethod
     def get_query_key(
         cls, 
         op_type: str, 
-        *args,
-        **kwargs
+        batch_size: int,
+        seq_len: int, 
+        left_op_hidden_dim: int,
+        right_op_hidden_dim: int, 
+        layout: str,
+        comm_group_size: int = 1, 
+        comm_data_size: int = 1
     ) -> str:
-        """ Generate a unique query key for the GEMM operation. """
-        # return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
-        if len(args) == 4:
-            batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim = args
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}"
-        elif len(args) == 2:
-            tp_degree, data_size = args
-            return f"{op_type}_tp{tp_degree}_ds{data_size}"
+        """ Generate a unique query key for a computation or communication operation. """
+
+        if   op_type == "gemm":
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif op_type == "bmm":
+            assert right_op_hidden_dim is None
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
+        elif op_type == "reduce_sum":
+            assert seq_len is None
+            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+            assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
+            return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
+        
