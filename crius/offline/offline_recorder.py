@@ -61,11 +61,11 @@ class OfflineDataRecorder:
             batch_size, seq_len, left_hidden_dim, right_hidden_dim, layout = args  
 
             if query_key in self.data and not self.force_overwrite:
-                logger.info(f"Cached GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
+                logger.info(f"Cached {op_type} profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
                                         f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
                 return
                 
-            logger.info(f"=========> GEMM profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
+            logger.info(f"=========> {op_type} profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
                                         f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
                  
         elif len(args) == 2:       
@@ -117,6 +117,9 @@ class OfflineDataRecorder:
         elif op_type == "reduce_sum":
             assert seq_len is None
             return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif op_type == "baddbmm":
+            assert right_op_hidden_dim is None
+            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{op_type}_g{comm_group_size}_d{comm_data_size}"

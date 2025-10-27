@@ -369,20 +369,29 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
-            min_batch_size=1,
-            max_batch_size=1024,
+            # min_batch_size=1,
+            min_batch_size=128,
+            max_batch_size=128,
             batch_size_step="power-of-2",
             min_seq_len=1,
-            max_seq_len=8,
+            max_seq_len=4,
+            # max_seq_len=128,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims =[128, 256, 512, 1024, 1536, 2048, 4096, 8192, 25000],
-            gemm_right_op_hidden_dims=[128, 256, 512, 1024, 1536, 2048, 4096, 8192, 25000],
+            gemm_left_op_hidden_dims =[64, 128, 192, 256, 5000],
+            # gemm_left_op_hidden_dims =[128, 256, 5000],
+            gemm_right_op_hidden_dims=[64, 128, 192, 256, 5000],
+            # gemm_right_op_hidden_dims =[128, 256, 5000],
+            reduce_sum_left_op_hidden_dims =[64, 128, 192, 256, 5000],
+            reduce_sum_right_op_hidden_dims=[64, 128, 192, 256, 5000],
+            bmm_op_hidden_dims =[64, 1024, 2048],
+            # bmm_right_op_hidden_dims=[512, 1024, 1536, 2048, 25000],
+            baddbmm_op_hidden_dims =[64, 1024, 2048],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -396,7 +405,10 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         
         offline_profiler.profile_all_gemm()
-        offline_profiler.profile_all_comm()
+        # offline_profiler.profile_all_baddbmm()
+        # offline_profiler.profile_all_reduce_sum()
+        # offline_profiler.profile_all_bmm()
+        # offline_profiler.profile_all_comm()
 
     @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
@@ -523,7 +535,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
             prof.export_chrome_trace('/app/torch_exec_trace.json')
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 
@@ -618,14 +630,14 @@ class TorchModelProfileTest(unittest.TestCase):
 
 
         global_bs = 8
-        seq_len = 1024
+        seq_len = 128
         num_micro_batches = 2
-        hidden_size = 1024
+        hidden_size = 128
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
         device = "cuda"
-        vocab_size = 50000
+        vocab_size = 10000
         use_toy = False
         
         global_configs.training_backend = "megatron"
@@ -759,20 +771,20 @@ class TorchModelProfileTest(unittest.TestCase):
             }
 
         # Profile
-        profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
-        )
-        e2e_latency = profiler.profile(
-            model=model,
-            base_input_args=input_args,
-            base_input_kwargs=input_kwargs,
-            parallelism_plan=parallelism_plan,
-            only_forward=global_configs.only_forward,
-        )
+        # profiler = CriusDistProfiler(
+        #     profiled_data_path='./crius/offline/prof_data.pkl',
+        # )
+        # e2e_latency = profiler.profile(
+        #     model=model,
+        #     base_input_args=input_args,
+        #     base_input_kwargs=input_kwargs,
+        #     parallelism_plan=parallelism_plan,
+        #     only_forward=global_configs.only_forward,
+        # )
 
-        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+        # print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-        exit(0)
+        # exit(0)
 
         ################# Real profiling #################
         _model_loader_class = ModelLoader
@@ -781,22 +793,59 @@ class TorchModelProfileTest(unittest.TestCase):
             model_kwargs={
                 "hidden_size": hidden_size,
                 "num_layers": num_layers,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
                 "device": device,
                 "dtype": dtype,
                 "megatron_config": megatron_config,
+                "use_toy": use_toy,
             },
             device_str=device,
         )
         model = model_loader.load()
 
+        # Inputs
+        def generate_inputs(batch_size, seq_len, hidden_size, dtype, device):
+            input_ids = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device=device)
+            position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
+            attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
+            return {
+                'input_ids': input_ids,
+                'position_ids': position_ids,
+                'attention_mask': attention_mask
+            }
+
+        data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, dtype, device) 
+                for _ in range(num_micro_batches)]
+        
+        # data = [
+        #     torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
+        #         for _ in range(num_micro_batches)
+        # ]
+        # input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        # position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+        # attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+        # decoder_input = None
+        # labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        # input_args = ()
+        # input_kwargs = {
+        #     "input_ids": input_ids,
+        #     "position_ids": position_ids,
+        #     "attention_mask": attention_mask,
+        #     "decoder_input": decoder_input,
+        #     "labels": labels,
+        # }
+
+        
         # Warmup
         for _ in range(100):
             with torch.no_grad():
-                _ = model(data[0])
+                _ = model(**data[0])
         torch.cuda.synchronize(device)
     
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)  
+
         # Measure
         start_event.record()
         for _ in range(1000):
