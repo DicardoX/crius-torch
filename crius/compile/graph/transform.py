@@ -324,6 +324,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_input_grad, "output_shapes", output_shapes_)
             setattr(bw_node_input_grad, "layer_type", "gemm")
             setattr(bw_node_input_grad, "layout", "b:s:h2,h2:h1")
+            setattr(bw_node_input_grad, "fw_node", node)
 
             # Weight gradient: [b, h1, s] x [b, s, h2] -> [b, h1, h2]
             def __fake_bw_func_gemm_weight_grad():
@@ -337,6 +338,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_weight_grad, "output_shapes", output_shapes_)
             setattr(bw_node_weight_grad, "layer_type", "gemm")
             setattr(bw_node_weight_grad, "layout", "b:h1:s,b:s:h2")
+            setattr(bw_node_weight_grad, "fw_node", node)
 
             # Summing weight gradient dim0: [b, h1, h2] -> [h1, h2]
             def __fake_bw_func_gemm_weight_grad_reduce_sum():
@@ -350,6 +352,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_weight_grad_reduce_sum, "output_shapes", output_shapes_)
             setattr(bw_node_weight_grad_reduce_sum, "layer_type", "reduce_sum")
             setattr(bw_node_weight_grad_reduce_sum, "layout", "b:h1:h2")
+            setattr(bw_node_weight_grad_reduce_sum, "fw_node", node)
 
         elif node.layer_type == "bmm":  # [b, s, s] x [b, s, h1] -> [b, s, h1]
             assert len(node.input_shapes[0]) == len(node.input_shapes[1]) == len(node.output_shapes[0]) == 3
@@ -367,6 +370,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_attn_score_grad, "output_shapes", output_shapes_)
             setattr(bw_node_attn_score_grad, "layer_type", "bmm")
             setattr(bw_node_attn_score_grad, "layout", "b:s:h1,b:h1:s")
+            setattr(bw_node_attn_score_grad, "fw_node", node)
 
             # Value tensor gradient: [b, s, s] x [b, s, h1] -> [b, s, h1]
             def __fake_bw_func_bmm_value_tensor_grad():
@@ -380,6 +384,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_value_tensor_grad, "output_shapes", output_shapes_)
             setattr(bw_node_value_tensor_grad, "layer_type", "bmm")
             setattr(bw_node_value_tensor_grad, "layout", "b:s:s,b:s:h1")
+            setattr(bw_node_value_tensor_grad, "fw_node", node)
         
         elif node.layer_type == "baddbmm":  # [b, s, s] + [b, s, h1] x [b, h1, s] -> [b, s, s]
             assert len(node.input_shapes) == 3
@@ -398,6 +403,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_query_tensor_grad, "output_shapes", output_shapes_)
             setattr(bw_node_query_tensor_grad, "layer_type", "bmm")                 # Backward pass of baddbmm involves bmm
             setattr(bw_node_query_tensor_grad, "layout", "b:s:s,b:s:h1")
+            setattr(bw_node_query_tensor_grad, "fw_node", node)
 
             # Key tensor gradient: [b, h1, s] x [b, s, s] -> [b, h1, s]
             def __fake_bw_func_baddbmm_key_tensor_grad():
@@ -411,6 +417,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_key_tensor_grad, "output_shapes", output_shapes_)
             setattr(bw_node_key_tensor_grad, "layer_type", "bmm")
             setattr(bw_node_key_tensor_grad, "layout", "b:h1:s,b:s:s")
+            setattr(bw_node_key_tensor_grad, "fw_node", node)
 
         elif node.layer_type == "all_reduce":
             pass    # Directly return out_grad, which are the same across all ranks, as outputs are the same after allreduce in forward

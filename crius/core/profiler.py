@@ -84,7 +84,7 @@ class CriusDistProfiler:
                 suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
             logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-                         f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                         f"OP type: {node.op} | Layer type: {node.layer_type} | Stage index: {node.stage_index} |" + 
                          f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                          f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
         if bw_graph is not None:
@@ -93,7 +93,7 @@ class CriusDistProfiler:
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
                 logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-                             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                             f"OP type: {node.op} | Layer type: {node.layer_type} | Stage index: {node.stage_index} |" + 
                              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
@@ -237,16 +237,16 @@ class CriusDistProfiler:
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
 
+        An example with 2 stages (2 fw + 2 bw) and 2 microbatches:
+
                    Warmup |         Steady          | Drain
         clock num    0    |   1     2     3     4   |   5
         ---------  -----  | ----- ----- ----- ----- | -----
-         stage 0   (0,0)  | (0,1)       (0,2)       | (0,3)
-         stage 1          | (1,0) (1,2) (1,1) (1,3) |
+         stage 0   (0,0)  | (0,1)       (0,-1)       | (0,-2)
+         stage 1          | (1,0) (1,-1) (1,1) (1,-2) |
 
-        where `(i,j)` denotes stage `i` executes micro-batch `j` when `j < #micro-batches`,
-        and denotes stage `i` executes micro-batch `j - #micro-batches` when `j >= #micro-batches`.
-
-        Note that the backward pass's latency is 2x of the forward pass.
+        where `(i,j)` denotes stage `i` executes forward micro-batch `j` when `j >= 0`,
+        and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
         
         num_microbatches = parallelism_plan.num_microbatches
