@@ -36,6 +36,15 @@ class GlobalEnvConfigs:
     training_backend: str = "megatron"
     """ Training backend used for model training. Options: ['megatron', ] """
 
+    ###########################
+    # Resource Configurations #
+    ###########################
+    num_nodes: int = 1
+    """ Number of nodes. """
+
+    num_devices_per_node: int = 1
+    """ Number of devices per node. """
+
     #####################
     # Model Parallelism #
     #####################
