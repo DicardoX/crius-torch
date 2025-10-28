@@ -64,28 +64,20 @@ class ParallelTuneTest(unittest.TestCase):
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
 
-        # Parallelism plan
-        op_to_layer_mapping, layer_to_stage_mapping = None, None
+        # Prototype of parallelism plan
         pipeline_stage_partition_method = "uniform"
         pipeline_use_boundary_markers = True
         pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
         pipeline_boundary_end_marker = ['dropout', 'add', ]
-
-        parallelism_plan = ParallelismPlan(
+        proto_parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
             pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
             num_layers=num_layers,
             num_microbatches=num_micro_batches,
-            tensor_parallel_degree=global_configs.tensor_model_parallel_size,
-            data_parallel_degree=global_configs.data_parallel_size,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
-            # pipeline_num_preprocess_nodes=pipeline_num_preprocess_nodes,
-            # pipeline_num_postprocess_nodes=pipeline_num_postprocess_nodes,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,
-            op_to_layer_mapping=op_to_layer_mapping,
-            layer_to_stage_mapping=layer_to_stage_mapping,
         )
 
         # We manually set the communication op insertion rules
@@ -165,12 +157,14 @@ class ParallelTuneTest(unittest.TestCase):
 
         # Tune
         tuner = CriusParallelTuner(
+            model=model,
             num_nodes=global_configs.num_nodes,
             num_devices_per_node=global_configs.num_devices_per_node,
+            proto_parallelism_plan=proto_parallelism_plan,
             grid_plan_optimization_mode="all",
             profiled_data_path='./crius/offline/prof_data.pkl',
         )
-        tuner.tune()
+        tuner.tune(input_args, input_kwargs)
 
 
 if __name__ == '__main__':

@@ -19,6 +19,7 @@ from crius.model_parallel.utils import ParallelismPlan
 
 __all__ = [
     "CompileConfigs",
+    "precompile",
     "compile",
 ]
 
@@ -35,6 +36,29 @@ class CompileConfigs:
 
     parallelism_plan: ParallelismPlan
     """ Parallelism plan of the model. """
+
+
+def precompile(
+    model: nn.Module, 
+    base_input_args: Tuple[Any], 
+    base_input_kwargs: Dict[str, Any],
+) -> IRGraph:
+    """ Partial compilation with (1) IR graph transformation and (2) shape propagation.
+    
+    This is used in Crius's planner, where multiple IR graphs should be compiled. 
+    `dynamo.export()` would cause compilation error if repetatively called: 
+        torch._dynamo.exc.UserError: Cannot export model which references tensors that are 
+        neither buffers/parameters/constants nor are direct inputs.  For each tensor, if you'd 
+        like this tensor to be an explicit input, add it as a dummy argument to the top-level 
+        model definition you are exporting; if you would like its value to be embedded as an 
+        exported constant, wrap its access in a function marked with @assume_constant_result.
+
+    Args:
+        model: Torch-like model to be compiled.
+        base_input_args: (Optional) Input arguments of model `.forward()` for IR graph transformation.
+        base_input_kwargs: (Optional) Input keyword arguments of model `.forward()` for IR graph transformation.
+    """
+    raise NotImplementedError
 
 
 def compile(

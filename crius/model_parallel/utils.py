@@ -23,7 +23,7 @@ class ParallelismPlan:
     """ Degree of pipeline parallelism. """
 
     num_layers: int = 1
-    """ Number of layers in the model. """
+    """ Number of transformer layers in the LLM model. """
 
     num_microbatches: int = 1
     """ Number of microbatches in pipeline parallelism. """
