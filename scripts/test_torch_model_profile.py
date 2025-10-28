@@ -463,10 +463,10 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         e2e_latency = profiler.profile(
             model=model,
-            base_input_args=input_args,
-            base_input_kwargs=input_kwargs,
             parallelism_plan=parallelism_plan,
             only_forward=global_configs.only_forward,
+            base_input_args=input_args,
+            base_input_kwargs=input_kwargs,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")

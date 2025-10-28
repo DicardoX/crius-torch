@@ -2,6 +2,8 @@
 # -*- coding:utf-8 -*-
 # Author: Chunyu Xue
 
+__all__ = [ "Grid", ]
+
 
 class Grid:
     """ Grid object for efficient parallelism optimization. """

@@ -35,7 +35,8 @@ class ParallelismPlan:
     """ Degree of data parallelism. """
 
     pipeline_stage_partition_method: str = "uniform"
-    """ How to partition operators into stages. Options: ['uniform', 'manual', ] """
+    """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
+    Detailed in `class CriusParallelPlanner`."""
 
     pipeline_use_boundary_markers: bool = False
     """ Whether to use boundary markers to indicate the start and end of a layer in the IR graph. """

@@ -24,7 +24,7 @@ from crius.global_envs import logger, global_configs
 class CriusDistProfiler:
     """ Crius Torch-like disaggregated profiler. 
     
-    This module provides (1) operator disaggregation and (2) Device-free model profiling.
+    Roadmap of this module: (1) Operator disaggregation, and (2) Device-free model profiling.
     """
 
     def __init__(self, profiled_data_path: Optional[str] = None) -> None:
@@ -45,33 +45,40 @@ class CriusDistProfiler:
 
     def profile(
         self, model: nn.Module, 
-        base_input_args: Tuple[Any],
-        base_input_kwargs: Dict[str, Any],
         parallelism_plan: ParallelismPlan,
         only_forward: bool = False,
+        base_input_args: Tuple[Any] = None,
+        base_input_kwargs: Dict[str, Any] = None,
+        graph: IRGraph = None,
+        bw_graph: IRGraph = None,
     ) -> Optional[float]:
         """ Profile the model. 
         
         Args:
             model: Torch-like model to be profiled.
-            base_input_args: Input arguments of model `.forward()` for IR graph transformation.
-            base_input_kwargs: Input keyword arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
             only_forward: If True, only profile the forward pass. Default is False.
-        
+            base_input_args: (Optional) Input arguments of model `.forward()` for IR graph transformation.
+            base_input_kwargs: (Optional) Input keyword arguments of model `.forward()` for IR graph transformation.
+            graph: (Optional) Pre-generated forward IR graph.
+            bw_graph: (Optional) Pre-generated backward IR graph.
+
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
         """
 
-        # Step 1. Compile the model into IR graph
-        compile_configs = CompileConfigs(
-            base_input_args=base_input_args,
-            base_input_kwargs=base_input_kwargs,
-            parallelism_plan=parallelism_plan,
-        )
-        graph, bw_graph = compile(model, compile_configs)
+        # Step 0. (Optional) Compile the model into IR graph
+        if graph is None:
+            assert base_input_args is not None and base_input_kwargs is not None, \
+                f"When no pre-generated IR graphs, must provide base inputs for compilation in profiler."
+            compile_configs = CompileConfigs(
+                base_input_args=base_input_args,
+                base_input_kwargs=base_input_kwargs,
+                parallelism_plan=parallelism_plan,
+            )
+            graph, bw_graph = compile(model, compile_configs)
 
-        # Step 2. Query and record per-operator latencies
+        # Step 1. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
         logger.debug("\n\n============> Forward graph")
         for node in graph.nodes:
@@ -97,10 +104,10 @@ class CriusDistProfiler:
                              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
-        # Step 3. Compute per-stage latency
+        # Step 2. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
 
-        # Step 4. Model end-to-end pipeline latency
+        # Step 3. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
             stage_latencies, parallelism_plan, only_forward,
         )
