@@ -11,7 +11,7 @@ from torch import nn
 
 from crius.core.grid_estimator.grid import Grid
 from crius.model_parallel.utils import ParallelismPlan
-from crius.compile import (precompile, CompileConfigs)
+from crius.compile import (postcompile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
 
 __all__ = [ "CriusParallelPlanner", ]
@@ -40,15 +40,7 @@ class CriusParallelPlanner:
         self._power_of_two_degree = True
         """ Force all degrees to be power-of-2. """
 
-    def _precompile_model(self):
-        """ Pre-compile the model into IR graphs. """
-        # TODO(chunyu): Can we do something like: pre-compile the model once, adjust the IR graphs for 
-        #               each parallelism plan? We leave this for future implementation.
-        raise NotImplementedError
-
-    def generate_pareto_optimal_plans(
-        self, grid: Grid, base_input_args: Tuple[Any], base_input_kwargs: Dict[str, Any],
-    ) -> List[ParallelismPlan]:
+    def generate_pareto_optimal_plans(self, grid: Grid, graph: IRGraph) -> List[ParallelismPlan]:
         """ Generate Pareto-optimal set of parallelism plans in this grid. 
         
         TODO(chunyu): This CPU-only process can be accelerated via multi-thread.
@@ -59,12 +51,8 @@ class CriusParallelPlanner:
 
         # For each plan, compile the model
         for plan in plans:
-            compile_configs = CompileConfigs(
-                base_input_args=base_input_args,
-                base_input_kwargs=base_input_kwargs,
-                parallelism_plan=plan,
-            )
-            graph, bw_graph = precompile(self.model, compile_configs)
+            # Parallelism-specific post-compile
+            graph, bw_graph = postcompile(graph, plan)
         
             # Get operator information: FLOPs, memory access
             

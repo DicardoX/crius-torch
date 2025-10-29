@@ -20,6 +20,7 @@ from crius.model_parallel.utils import ParallelismPlan
 __all__ = [
     "CompileConfigs",
     "precompile",
+    "postcompile",
     "compile",
 ]
 
@@ -43,7 +44,7 @@ def precompile(
     base_input_args: Tuple[Any], 
     base_input_kwargs: Dict[str, Any],
 ) -> IRGraph:
-    """ Partial compilation with (1) IR graph transformation and (2) shape propagation.
+    """ Pre-compilation with (1) IR graph transformation and (2) Shape propagation.
     
     This is used in Crius's planner, where multiple IR graphs should be compiled. 
     `dynamo.export()` would cause compilation error if repetatively called: 
@@ -58,7 +59,34 @@ def precompile(
         base_input_args: (Optional) Input arguments of model `.forward()` for IR graph transformation.
         base_input_kwargs: (Optional) Input keyword arguments of model `.forward()` for IR graph transformation.
     """
-    raise NotImplementedError
+
+    # Step 1. Transform model into IR graph
+    graph = transform_to_ir_graph(model, *base_input_args, **base_input_kwargs)
+    # Step 2. Propagate per-node input/output shapes
+    graph = propagate_node_shapes(graph, *base_input_args, **base_input_kwargs)
+    graph = infer_node_layer_types(graph)
+    return graph
+
+
+def postcompile(
+    graph: IRGraph,
+    parallelism_plan: ParallelismPlan,
+) -> List[IRGraph]: 
+    """ Post-compilation with (1) Communication insertion and (2) Backward graph construction. 
+    
+    This is also used in Crius's planner, which is parallelism-specific and repeatly called.
+    
+    Args:
+        graph: Forward IR graph.
+        parallelism_plan: The parallelism plan for the model to be profiled with.
+    """
+
+    # Step 3. Insert communication primitives
+    graph = insert_comm_primitives_into_graph(graph, parallelism_plan, forward_pass=True)
+    # Step 4. Construct backward graph
+    bw_graph = construct_backward_graph(graph)
+    bw_graph = insert_comm_primitives_into_graph(bw_graph, parallelism_plan, forward_pass=False)
+    return graph, bw_graph
 
 
 def compile(
