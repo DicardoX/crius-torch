@@ -205,6 +205,13 @@ class RowParallelLinear(torch.nn.Module):
         
         torch.distributed.all_reduce(output_parallel.contiguous(), group=mpu.get_tensor_model_parallel_group())
         output_ = output_parallel
+        
+        # if not torch._dynamo.is_compiling():
+        #     torch.distributed.all_reduce(output_parallel.contiguous(), group=mpu.get_tensor_model_parallel_group())
+        #     output_ = output_parallel
+        # else:
+        #     print("Skipping all_reduce during compilation") 
+        #     output_ = None   
 
         if not self.skip_bias_add:
             output = (output_ + self.bias) if self.bias is not None else output_

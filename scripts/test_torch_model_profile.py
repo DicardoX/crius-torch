@@ -770,21 +770,20 @@ class TorchModelProfileTest(unittest.TestCase):
                 "labels": labels,
             }
 
-        # Profile
-        # profiler = CriusDistProfiler(
-        #     profiled_data_path='./crius/offline/prof_data.pkl',
-        # )
-        # e2e_latency = profiler.profile(
-        #     model=model,
-        #     base_input_args=input_args,
-        #     base_input_kwargs=input_kwargs,
-        #     parallelism_plan=parallelism_plan,
-        #     only_forward=global_configs.only_forward,
-        # )
+        profiler = CriusDistProfiler(
+            profiled_data_path='./crius/offline/prof_data.pkl',
+        )
+        e2e_latency = profiler.profile(
+            model=model,
+            base_input_args=input_args,
+            base_input_kwargs=input_kwargs,
+            parallelism_plan=parallelism_plan,
+            only_forward=global_configs.only_forward,
+        )
 
-        # print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-        # exit(0)
+        exit(0)
 
         ################# Real profiling #################
         _model_loader_class = ModelLoader
@@ -806,18 +805,21 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Inputs
         def generate_inputs(batch_size, seq_len, hidden_size, dtype, device):
-            input_ids = torch.randn(batch_size, seq_len, hidden_size, dtype=dtype, device=device)
+            # input_ = torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=torch.float16, device=device)     
+            input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device=device)
             position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
-            attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
+            attention_mask = torch.ones(batch_size, 1, seq_len, seq_len, dtype=torch.bool, device=device)
             return {
+                # 'input_': input_,
                 'input_ids': input_ids,
                 'position_ids': position_ids,
                 'attention_mask': attention_mask
             }
 
-        data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, dtype, device) 
+        data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, torch.long, device) 
                 for _ in range(num_micro_batches)]
-        
+        # print(data)
+
         # data = [
         #     torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
         #         for _ in range(num_micro_batches)
@@ -850,7 +852,7 @@ class TorchModelProfileTest(unittest.TestCase):
         start_event.record()
         for _ in range(1000):
             with torch.no_grad():
-                _ = model(data[0])
+                _ = model(**data[0])
         end_event.record()
 
         end_event.synchronize()
