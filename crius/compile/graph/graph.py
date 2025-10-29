@@ -53,6 +53,8 @@ class IRNode(fx.Node):
         self.layout = None
         self.latency: Optional[float] = None
         self.stage_index: int = None    # Which pipeline stage this node belongs to
+        self.flops = None
+        self.memory_access = None
         self.fw_node = None             # (Optional) Corresponded forward IR node for a backward IR node 
 
 

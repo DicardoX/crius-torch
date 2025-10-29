@@ -24,9 +24,7 @@ class CriusParallelPlanner:
     
     Args:
         model: The model to be optimized.
-        pipeline_stage_partition_method: How to partition operators into stages. 
-            Options: ["uniform", "auto", ]. If "uniform", uniformly slice model operators 
-            into stages. If "auto", automatically slice model operators based on FLOPs information.
+        proto_parallelism_plan: A prototype of parallelism plan that includes some necessary attributes.
     """
 
     def __init__(
@@ -36,6 +34,10 @@ class CriusParallelPlanner:
     ):
         self.model = model
         self._proto_plan = proto_parallelism_plan
+        self.pipeline_stage_partition_method = proto_parallelism_plan.pipeline_stage_partition_method
+        """ How to partition operators into stages. Options: ["uniform", "auto", ]. If "uniform",
+        uniformly slice model operators into stages. If "auto", automatically slice model operators 
+        based on FLOPs information. """
 
         self._power_of_two_degree = True
         """ Force all degrees to be power-of-2. """
@@ -53,9 +55,14 @@ class CriusParallelPlanner:
         for plan in plans:
             # Parallelism-specific post-compile
             graph, bw_graph = postcompile(graph, plan)
-            # Get operator information: FLOPs, memory access
-            self._get_model_operator_information(graph, bw_graph)
-            # Assign per-(transformer) layer GPU quota
+
+            if self.pipeline_stage_partition_method == "uniform": 
+                pass    # No information needed
+            elif self.pipeline_stage_partition_method == "auto":
+                self._get_model_operator_information(graph, bw_graph)
+                self._assign_per_layer_gpu_quota()
+            else:
+                raise ValueError(f"Invalid pipeline stage partition method: {self.pipeline_stage_partition_method}")
 
             # Determine pipeline stage boundary
         
@@ -98,9 +105,7 @@ class CriusParallelPlanner:
     
     def _get_model_operator_information(self, graph: IRGraph, bw_graph: Optional[IRGraph] = None):
         """ Get operator information of the model such as FLOPs and memory access. """
-
         # TODO(chunyu): Given an IR graph, how we get FLOPs and memory per operator?
-        
         raise NotImplementedError
     
     def _assign_per_layer_gpu_quota(self):
