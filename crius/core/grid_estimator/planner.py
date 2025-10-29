@@ -53,9 +53,8 @@ class CriusParallelPlanner:
         for plan in plans:
             # Parallelism-specific post-compile
             graph, bw_graph = postcompile(graph, plan)
-        
             # Get operator information: FLOPs, memory access
-            
+            self._get_model_operator_information(graph, bw_graph)
             # Assign per-(transformer) layer GPU quota
 
             # Determine pipeline stage boundary
@@ -96,13 +95,12 @@ class CriusParallelPlanner:
                 raise ValueError(f"Currently only supports power-of-2 degree in plan enumeration.")
         
         return plans
-
-    def _compile_model_with_one_plan(self, parallelism_plan: ParallelismPlan):
-        """ Compile model into IR graphs based on the plan. """
-        raise NotImplementedError
     
-    def _get_model_operator_information(self):
+    def _get_model_operator_information(self, graph: IRGraph, bw_graph: Optional[IRGraph] = None):
         """ Get operator information of the model such as FLOPs and memory access. """
+
+        # TODO(chunyu): Given an IR graph, how we get FLOPs and memory per operator?
+        
         raise NotImplementedError
     
     def _assign_per_layer_gpu_quota(self):
