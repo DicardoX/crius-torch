@@ -12,9 +12,9 @@ from typing import (Any, Tuple, Optional, List, Callable, Dict)
 import torch
 from torch import nn
 
-from crius.core.grid_estimator.planner import CriusParallelPlanner
+from crius.core.grid_planner.planner import CriusParallelPlanner
 from crius.core.profiler import CriusDistProfiler
-from crius.core.grid_estimator.grid import Grid
+from crius.core.grid_planner.grid import Grid
 from crius.compile import (precompile, CompileConfigs)
 from crius.model_parallel.utils import ParallelismPlan
 
