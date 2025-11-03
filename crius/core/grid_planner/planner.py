@@ -66,10 +66,11 @@ class CriusParallelPlanner:
 
             # Determine pipeline stage boundary
             self._partition_pipeline_stages(graph, plan, bw_graph)
-        
-        exit(0)
+            plan.graph = graph
+            plan.bw_graph = bw_graph
 
         # Enumerate and formulate a Pareto-optimal plan set
+
 
     def _enumerate_candidate_parallelism_plans(self, grid: Grid):
         """ Enumerate plans (`ParallelismPlan`). """
@@ -177,9 +178,8 @@ class CriusParallelPlanner:
             if bw_graph is None:
                 return
         
-        elif parallelism_plan.pipeline_stage_partition_method == "manual":
+        elif parallelism_plan.pipeline_stage_partition_method == "auto":
             raise NotImplementedError
-
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {parallelism_plan.pipeline_stage_partition_method}")
         
@@ -189,6 +189,27 @@ class CriusParallelPlanner:
             # bw_stage_index = 2 * parallelism_plan.pipeline_parallel_degree - node.fw_node.stage_index - 1
             setattr(node, "stage_index", node.fw_node.stage_index)
     
-    def _formulate_pareto_optimal_plan_set(self):
+    def _formulate_pareto_optimal_plan_set(self, parallelism_plans: List[ParallelismPlan]) -> List[ParallelismPlan]:
         """ Formulate a set of Pareto-optimal parallelism plans. """
+        
+        if self._proto_plan.pipeline_stage_partition_method == "uniform":
+            # Given that all stages are uniformly partitioned, we can simply compare plans based on their intra-stage
+            # communication costs, which dominates intra-stage latency as observed in the paper. 
+            optimal_plan, least_comm_cost = None, None
+            for plan in parallelism_plans:
+                this_comm_cost = self._evaluate_communication_cost_with_oom_check(plan)
+                if optimal_plan is None or this_comm_cost < least_comm_cost:
+                    optimal_plan = plan
+                    least_comm_cost = this_comm_cost
+
+            return [optimal_plan, ]
+        
+        elif self._proto_plan.pipeline_stage_partition_method == "auto":
+            raise NotImplementedError
+        else:
+            raise ValueError(f"Invalid pipeline stage partition method: {self._proto_plan.pipeline_stage_partition_method}")
+
+    def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
+        """ Evaluate the communication cost of the model under the given parallelism plan. """
+        # TODO(chunyu): How to evaluate communication cost given an IR graph and a parallelism plan?
         raise NotImplementedError
