@@ -13,6 +13,7 @@ from crius.core.grid_planner.grid import Grid
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (postcompile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
+from crius.global_envs import global_configs, dtype_to_bytes
 
 __all__ = [ "CriusParallelPlanner", ]
 
@@ -59,7 +60,7 @@ class CriusParallelPlanner:
             if self.pipeline_stage_partition_method == "uniform": 
                 pass    # No information needed
             elif self.pipeline_stage_partition_method == "auto":
-                self._get_model_operator_information(graph, bw_graph)
+                # self._get_model_operator_information(graph, bw_graph)
                 self._assign_per_layer_gpu_quota()
             else:
                 raise ValueError(f"Invalid pipeline stage partition method: {self.pipeline_stage_partition_method}")
@@ -70,7 +71,7 @@ class CriusParallelPlanner:
             plan.bw_graph = bw_graph
 
         # Enumerate and formulate a Pareto-optimal plan set
-
+        return self._formulate_pareto_optimal_plan_set(plans)
 
     def _enumerate_candidate_parallelism_plans(self, grid: Grid):
         """ Enumerate plans (`ParallelismPlan`). """
@@ -105,11 +106,11 @@ class CriusParallelPlanner:
         
         return plans
     
-    def _get_model_operator_information(self, graph: IRGraph, bw_graph: Optional[IRGraph] = None):
-        """ Get operator information of the model such as FLOPs and memory access. """
-        # TODO(chunyu): Given an IR graph, how we get FLOPs and memory per operator?
-        raise NotImplementedError
-    
+    # def _get_model_operator_information(self, graph: IRGraph, bw_graph: Optional[IRGraph] = None) -> None:
+    #     """ Get operator information of the model such as FLOPs and memory access. """
+    #     for node in graph.nodes:
+    #         raise NotImplementedError
+
     def _assign_per_layer_gpu_quota(self):
         """ TODO(chunyu): Which granularity should we use to assign? Operator or transformer layer? """
         raise NotImplementedError
@@ -195,21 +196,42 @@ class CriusParallelPlanner:
         if self._proto_plan.pipeline_stage_partition_method == "uniform":
             # Given that all stages are uniformly partitioned, we can simply compare plans based on their intra-stage
             # communication costs, which dominates intra-stage latency as observed in the paper. 
-            optimal_plan, least_comm_cost = None, None
+            optimal_plan, least_comm_cost = None, 1e9
             for plan in parallelism_plans:
                 this_comm_cost = self._evaluate_communication_cost_with_oom_check(plan)
                 if optimal_plan is None or this_comm_cost < least_comm_cost:
                     optimal_plan = plan
                     least_comm_cost = this_comm_cost
-
             return [optimal_plan, ]
-        
+
         elif self._proto_plan.pipeline_stage_partition_method == "auto":
             raise NotImplementedError
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {self._proto_plan.pipeline_stage_partition_method}")
 
     def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
-        """ Evaluate the communication cost of the model under the given parallelism plan. """
-        # TODO(chunyu): How to evaluate communication cost given an IR graph and a parallelism plan?
+        """ Evaluate the communication cost of the model under the given parallelism plan, check . """
+        # if self._estimate_model_memory_access(parallelism_plan)
         raise NotImplementedError
+    
+    def _estimate_model_memory_access(
+        self, 
+        parallelism_plan: ParallelismPlan,
+    ) -> List[float]:
+        """ Estimate memory access of the model, including weight, activation, optimizer, and gradient. 
+
+        TODO(chunyu): Consider tensor and pipeline parallelism effects on weight memory access. 
+        
+        Args:
+            parallelism_plan: The parallelism plan for the model to be profiled with.
+        """
+        
+        weight_memory, act_memory, optim_memory, grad_memory = 0.0, 0.0, 0.0, 0.0
+        graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
+        for node in graph.nodes:
+            if "tensor_meta" not in node.meta:
+                continue    # Skip non-tensor node
+            tensor_meta = node.meta["tensor_meta"]
+            weight_memory += tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)
+        
+        return weight_memory, act_memory, optim_memory, grad_memory

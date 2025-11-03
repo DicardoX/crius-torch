@@ -104,3 +104,13 @@ class GlobalEnvConfigs:
 
 global_configs = GlobalEnvConfigs()
 """ Object of global configurations. """
+
+
+dtype_to_bytes = {
+    torch.float32: 4,
+    torch.float16: 2,
+    torch.float64: 8,
+    torch.int32: 4,
+    torch.int64: 8,
+}
+""" Data type to number of bytes mapping. """
