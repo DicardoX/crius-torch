@@ -210,28 +210,35 @@ class CriusParallelPlanner:
             raise ValueError(f"Invalid pipeline stage partition method: {self._proto_plan.pipeline_stage_partition_method}")
 
     def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
-        """ Evaluate the communication cost of the model under the given parallelism plan, check . """
-        # if self._estimate_model_memory_access(parallelism_plan)
+        """ Evaluate the communication cost of the model under the given parallelism plan and check OOM. """
+        if self._estimate_model_memory_access_gb(parallelism_plan) > global_configs.per_device_memory_capacity_in_gb:
+            return 1e9    # OOM occurs
+        
         raise NotImplementedError
     
-    def _estimate_model_memory_access(
+    def _estimate_model_memory_access_gb(
         self, 
         parallelism_plan: ParallelismPlan,
     ) -> List[float]:
         """ Estimate memory access of the model, including weight, activation, optimizer, and gradient. 
-
-        TODO(chunyu): Consider tensor and pipeline parallelism effects on weight memory access. 
         
         Args:
             parallelism_plan: The parallelism plan for the model to be profiled with.
         """
         
-        weight_memory, act_memory, optim_memory, grad_memory = 0.0, 0.0, 0.0, 0.0
+        stage_weight_mems, stage_act_mems, stage_optim_mems, stage_grad_mems = [
+            [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)] for _ in range(4)
+        ]
         graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
         for node in graph.nodes:
             if "tensor_meta" not in node.meta:
                 continue    # Skip non-tensor node
             tensor_meta = node.meta["tensor_meta"]
-            weight_memory += tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)
-        
-        return weight_memory, act_memory, optim_memory, grad_memory
+            stage_weight_mems[node.stage_index] += (
+                (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
+                parallelism_plan.tensor_parallel_degree
+            ) / (1024 ** 3)   # GB
+
+        max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem = max(stage_weight_mems), \
+            max(stage_act_mems), max(stage_optim_mems), max(stage_grad_mems)
+        return max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem
