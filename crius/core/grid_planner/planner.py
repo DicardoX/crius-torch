@@ -211,9 +211,24 @@ class CriusParallelPlanner:
 
     def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
         """ Evaluate the communication cost of the model under the given parallelism plan and check OOM. """
-        if self._estimate_model_memory_access_gb(parallelism_plan) > global_configs.per_device_memory_capacity_in_gb:
+        
+        (max_stage_weight_mem, max_stage_act_mem, 
+         max_stage_optim_mem, max_stage_grad_mem) = self._estimate_model_memory_access_gb(parallelism_plan)
+        if np.sum(
+            max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
+        ) > global_configs.per_device_memory_capacity_in_gb:
             return 1e9    # OOM occurs
         
+        # Traverse forward/backward graphs to estimate communication cost
+        stage_comm_costs = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
+        graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
+        # ----> Forward pass
+        for node in graph.nodes:
+            if node.layer_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+                # Communication op
+                print(node.input_shapes)
+                exit(0)
+
         raise NotImplementedError
     
     def _estimate_model_memory_access_gb(

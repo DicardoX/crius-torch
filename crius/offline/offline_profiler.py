@@ -239,7 +239,7 @@ class CriusOfflineDataManager:
     @classmethod
     def get_query_key(
         cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
-        layout: str, comm_group_size: int = 1, comm_data_size: int = 1,
+        layout: str = "", comm_group_size: int = 1, comm_data_size: int = 1,
     ) -> str:
         """ Generate a unique query key for an operation. """
 
