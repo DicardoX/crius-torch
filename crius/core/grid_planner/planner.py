@@ -226,7 +226,12 @@ class CriusParallelPlanner:
         for node in graph.nodes:
             if node.layer_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
                 # Communication op
-                print(node.input_shapes)
+                tensor_meta = node.meta["tensor_meta"]
+                nbytes_per_numel = dtype_to_bytes.get(tensor_meta.dtype, 4)          
+                if node.layer_type == "all_reduce":
+                    print(node.input_shapes)
+                    raise NotImplementedError
+                
                 exit(0)
 
         raise NotImplementedError
