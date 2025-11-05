@@ -82,22 +82,22 @@ class ParallelTuneTest(unittest.TestCase):
 
         # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
-            # "all_reduce:tp": {
-            #     # "after_nodes": ['fc2', ],
-            #     # "after_nodes": ['matmul', ],
-            #     "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
-            #     "after_nodes": ['contiguous', ],
-            #     "interval": 1,
-            #     "pass": 'forward',
-            #     "parallelism": 'tp',
-            # },
-            # "all_reduce:dp": {
-            #     "after_markers": [],
-            #     "after_nodes": ['weight_grad_reduce_sum', ],
-            #     "interval": 1,
-            #     "pass": 'backward',
-            #     "parallelism": 'dp',
-            # },
+            "all_reduce:tp": {
+                # "after_nodes": ['fc2', ],
+                # "after_nodes": ['matmul', ],
+                "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
+                "after_nodes": ['contiguous', ],
+                "interval": 1,
+                "pass": 'forward',
+                "parallelism": 'tp',
+            },
+            "all_reduce:dp": {
+                "after_markers": [],
+                "after_nodes": ['weight_grad_reduce_sum', ],
+                "interval": 1,
+                "pass": 'backward',
+                "parallelism": 'dp',
+            },
         }
 
         # Init distributed

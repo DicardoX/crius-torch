@@ -121,3 +121,50 @@ class IRGraph(fx.Graph):
         self._insert(n)
         self._len += 1
         return n
+    
+    def __deepcopy__(self, memo: Dict[int, Any]) -> "IRGraph":
+        """Deepcopy the IRGraph object, including all nodes and custom attributes.
+        
+        Args:
+            memo: A dictionary to keep track of already copied objects, 
+                  preventing infinite recursion from circular references.
+        Returns:
+            A deepcopied instance of IRGraph.
+        """
+        
+        # Create a new IRGraph instance
+        new_graph = IRGraph(owning_module=self.owning_module)
+        # Map original nodes to new nodes (to resolve node references)
+        node_map: Dict[fx.Node, IRNode] = {}
+        # Copy all nodes (including custom attributes)
+        for node in self.nodes:
+            # Copy the node itself using node_copy (ensures IRNode type and handles arg/kwarg references)
+            # arg_transform replaces original nodes with their new copies in the new graph
+            new_node = new_graph.node_copy(
+                node,
+                arg_transform=lambda n: node_map[n] if isinstance(n, fx.Node) else n
+            )
+            # Explicitly copy custom attributes of IRNode (default deepcopy skips these)
+            new_node.layer_type = copy.deepcopy(node.layer_type, memo)
+            new_node.input_shapes = copy.deepcopy(node.input_shapes, memo)
+            new_node.output_shapes = copy.deepcopy(node.output_shapes, memo)
+            new_node.node_pass = copy.deepcopy(node.node_pass, memo)
+            new_node.node_parallelism = copy.deepcopy(node.node_parallelism, memo)
+            new_node.layout = copy.deepcopy(node.layout, memo)
+            new_node.latency = copy.deepcopy(node.latency, memo)
+            new_node.stage_index = copy.deepcopy(node.stage_index, memo)
+            new_node.flops = copy.deepcopy(node.flops, memo)
+            new_node.memory_access = copy.deepcopy(node.memory_access, memo)
+            # Handle fw_node reference (map to the corresponding node in the new graph)
+            if node.fw_node is not None:
+                new_node.fw_node = node_map[node.fw_node]
+            else:
+                new_node.fw_node = None
+            
+            # Record the mapping from original node to new node
+            node_map[node] = new_node
+        
+        # Copy the _root node of IRGraph (ensure correct root reference)
+        new_graph._root = node_map[self._root] if self._root in node_map else new_graph._root
+        new_graph._insert = new_graph._root.prepend  # Maintain insertion logic
+        return new_graph

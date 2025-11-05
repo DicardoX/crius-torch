@@ -272,6 +272,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                         setattr(comm_node, "output_shapes", output_shapes)
                         setattr(comm_node, "node_pass", node_pass)
                         setattr(comm_node, "node_parallelism", node_parallelism)
+                        setattr(comm_node, "fw_node", node.fw_node)   # Link to forward node
 
     return graph
 

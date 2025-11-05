@@ -204,7 +204,7 @@ class CriusDistProfiler:
         """ Compute per-stage latencies. """
 
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
-        for node in graph.nodes:
+        for i, node in enumerate(list(graph.nodes)):
             # Accumulate latency
             assert node.stage_index is not None, "Forward node stage index is not set."
             if node.latency is not None and node.stage_index is not None:

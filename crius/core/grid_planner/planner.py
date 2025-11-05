@@ -43,7 +43,7 @@ class CriusParallelPlanner:
         self._power_of_two_degree = True
         """ Force all degrees to be power-of-2. """
 
-    def generate_pareto_optimal_plans(self, grid: Grid, graph: IRGraph) -> List[ParallelismPlan]:
+    def generate_pareto_optimal_plans(self, grid: Grid, precompiled_graph: IRGraph) -> List[ParallelismPlan]:
         """ Generate Pareto-optimal set of parallelism plans in this grid. 
         
         TODO(chunyu): This CPU-only process can be accelerated via multi-thread.
@@ -55,7 +55,7 @@ class CriusParallelPlanner:
         # For each plan, compile the model
         for plan in plans:
             # Parallelism-specific post-compile
-            graph, bw_graph = postcompile(graph, plan)
+            graph, bw_graph = postcompile(precompiled_graph, plan)
 
             if self.pipeline_stage_partition_method == "uniform": 
                 pass    # No information needed
@@ -70,8 +70,15 @@ class CriusParallelPlanner:
             plan.graph = graph
             plan.bw_graph = bw_graph
 
+        # for node in grid.pareto_optimal_plans[0].graph.nodes:
+        #     print(node.target, node.stage_index)
+        # print(grid.pareto_optimal_plans)
+        # print("\n\n\n\n\n\n\n\n\n")
+
         # Enumerate and formulate a Pareto-optimal plan set
         return self._formulate_pareto_optimal_plan_set(plans)
+        
+        # exit(0)
 
     def _enumerate_candidate_parallelism_plans(self, grid: Grid):
         """ Enumerate plans (`ParallelismPlan`). """
@@ -124,12 +131,11 @@ class CriusParallelPlanner:
             this_stage_node_num, cur_stage_index = 0, 0
             for node in graph_.nodes:
                 this_stage_node_num += 1
-                if this_stage_node_num <= num_nodes_per_stage_[cur_stage_index]:
-                    setattr(node, "stage_index", cur_stage_index)
-
-                if this_stage_node_num == num_nodes_per_stage_[cur_stage_index]:
+                if this_stage_node_num > num_nodes_per_stage_[cur_stage_index]:
                     cur_stage_index += 1
                     this_stage_node_num = 0
+                
+                setattr(node, "stage_index", cur_stage_index)
 
         # Partition forward graph
         if parallelism_plan.pipeline_stage_partition_method == "uniform":
@@ -158,7 +164,7 @@ class CriusParallelPlanner:
                 num_fw_nodes_per_stage = []
                 for i in range(parallelism_plan.pipeline_parallel_degree):
                     num_fw_nodes_per_stage.append(sum(num_fw_nodes_per_layer[i*layers_per_stage:(i+1)*layers_per_stage]))   
-                __annotate_node_stage_index(num_fw_nodes_per_stage, graph)       
+                __annotate_node_stage_index(num_fw_nodes_per_stage, graph)
 
             elif parallelism_plan.pipeline_num_preprocess_nodes >= 0 and parallelism_plan.pipeline_num_postprocess_nodes >= 0:
                 # Manually specify the number of preprocess/postprocess nodes before looped stages
@@ -212,6 +218,10 @@ class CriusParallelPlanner:
     def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
         """ Evaluate the communication cost of the model under the given parallelism plan and check OOM. """
         
+        if True:
+            # A workaround for TP/DP selection, prioritizing DP
+            return parallelism_plan.data_parallel_degree * 1024 + parallelism_plan.tensor_parallel_degree
+
         (max_stage_weight_mem, max_stage_act_mem, 
          max_stage_optim_mem, max_stage_grad_mem) = self._estimate_model_memory_access_gb(parallelism_plan)
         if np.sum(
@@ -220,21 +230,49 @@ class CriusParallelPlanner:
             return 1e9    # OOM occurs
         
         # Traverse forward/backward graphs to estimate communication cost
-        stage_comm_costs = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
+        stage_comm_costs, bw_stage_comm_costs = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)], \
+            [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
-        # ----> Forward pass
-        for node in graph.nodes:
-            if node.layer_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
-                # Communication op
-                tensor_meta = node.meta["tensor_meta"]
-                nbytes_per_numel = dtype_to_bytes.get(tensor_meta.dtype, 4)          
-                if node.layer_type == "all_reduce":
-                    print(node.input_shapes)
-                    raise NotImplementedError
-                
-                exit(0)
+        for node in list(graph.nodes) + list(bw_graph.nodes):
+            if node.layer_type not in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+                continue
 
-        raise NotImplementedError
+            print(parallelism_plan.tensor_parallel_degree, parallelism_plan.data_parallel_degree, parallelism_plan.pipeline_parallel_degree)
+            print(node.node_parallelism)
+
+            nbytes_per_numel = dtype_to_bytes.get(parallelism_plan.comm_data_type, 4)  
+            assert len(node.input_shapes) == 1
+            comm_tensor_shape = node.input_shapes[0]
+            # Ranks of this communication operator
+            if node.node_parallelism == "tp":
+                n_ranks = parallelism_plan.tensor_parallel_degree
+            elif node.node_parallelism == "dp":
+                n_ranks = parallelism_plan.data_parallel_degree
+            else:
+                raise ValueError(f"Invalid node parallelism type: {node.node_parallelism}")
+            
+            print(node.layer_type, comm_tensor_shape, n_ranks, nbytes_per_numel, node.node_pass)
+
+            if node.layer_type == "all_reduce":
+                # Communication volume = 2 * comm_size * (n_ranks - 1) / n_ranks
+                comm_volume_in_bytes = 2 * np.prod(list(comm_tensor_shape)) * nbytes_per_numel * (n_ranks - 1) / n_ranks
+            elif node.layer_type == "all_gather":
+                raise NotImplementedError
+            elif node.layer_type == "reduce_scatter":
+                raise NotImplementedError
+            elif node.layer_type == "all_to_all":
+                raise NotImplementedError
+            
+            if node.node_pass == "forward":
+                stage_comm_costs[node.stage_index] += comm_volume_in_bytes
+            elif node.node_pass == "backward":
+                bw_stage_comm_costs[node.stage_index] += comm_volume_in_bytes
+            else:
+                raise ValueError(f"Invalid node pass type: {node.node_pass}")
+
+        # FIXME(chunyu): Use the "communication load" metric proposed in the paper
+        total_comm_cost =  np.sum(stage_comm_costs) + np.sum(bw_stage_comm_costs)
+        return total_comm_cost
     
     def _estimate_model_memory_access_gb(
         self, 

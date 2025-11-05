@@ -6,6 +6,7 @@
 
 from typing import (Any, List, Tuple, Callable, Optional, Dict)
 from dataclasses import dataclass
+from copy import deepcopy
 
 import torch
 from torch import nn
@@ -69,7 +70,7 @@ def precompile(
 
 
 def postcompile(
-    graph: IRGraph,
+    precompiled_graph: IRGraph,
     parallelism_plan: ParallelismPlan,
 ) -> List[IRGraph]: 
     """ Post-compilation with (1) Communication insertion and (2) Backward graph construction. 
@@ -77,12 +78,13 @@ def postcompile(
     This is also used in Crius's planner, which is parallelism-specific and repeatly called.
     
     Args:
-        graph: Forward IR graph.
+        precompiled_graph: Forward IR graph.
         parallelism_plan: The parallelism plan for the model to be profiled with.
     """
 
     # Step 3. Insert communication primitives
-    graph = insert_comm_primitives_into_graph(graph, parallelism_plan, forward_pass=True)
+    # NOTE: The deepcopy is necessary to maintain independent graphs for different parallelism plans
+    graph = insert_comm_primitives_into_graph(deepcopy(precompiled_graph), parallelism_plan, forward_pass=True)
     # Step 4. Construct backward graph
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, parallelism_plan, forward_pass=False)

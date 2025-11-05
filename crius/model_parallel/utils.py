@@ -7,6 +7,8 @@
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+import torch
+
 __all__ = [
     "ParallelismPlan",
 ]
@@ -27,6 +29,9 @@ class ParallelismPlan:
 
     num_microbatches: int = 1
     """ Number of microbatches in pipeline parallelism. """
+
+    comm_data_type: torch.dtype = torch.float16
+    """ Data type used in communication operations. """
     
     tensor_parallel_degree: int = 1
     """ Degree of tensor parallelism. """

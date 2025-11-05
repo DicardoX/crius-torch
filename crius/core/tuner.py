@@ -8,6 +8,7 @@ This module is independent to the underlying training backend (e.g., Megatron).
 """
 
 from typing import (Any, Tuple, Optional, List, Callable, Dict)
+from copy import deepcopy
 
 import torch
 from torch import nn
@@ -17,6 +18,7 @@ from crius.core.profiler import CriusDistProfiler
 from crius.core.grid_planner.grid import Grid
 from crius.compile import (precompile, CompileConfigs)
 from crius.model_parallel.utils import ParallelismPlan
+from crius.global_envs import global_configs
 
 __all__ = [ "CriusParallelTuner", ]
 
@@ -72,14 +74,27 @@ class CriusParallelTuner:
         grids: List[Grid] = self._enumerate_grids()
         # Step 2. Generate plans
         for grid in grids:
-            self.planner.generate_pareto_optimal_plans(grid, self._precompiled_fw_graph)
+            plans = self.planner.generate_pareto_optimal_plans(grid, self._precompiled_fw_graph)
+            grid.pareto_optimal_plans = plans
         # Step 3. Profile
+        optimal_plan, least_e2e_latency = None, 1e9
         for grid in grids:
             if self.grid_plan_optimization_mode == "all":
                 for plan in grid.pareto_optimal_plans:
-                    raise NotImplementedError
+                    this_e2e_latency = self.profiler.profile(
+                        model=self.model, parallelism_plan=plan, only_forward=global_configs.only_forward,
+                        graph=plan.graph, bw_graph=plan.bw_graph,
+                    )
+                    if this_e2e_latency < least_e2e_latency:
+                        optimal_plan = plan
+                        least_e2e_latency = this_e2e_latency
             else:
-                raise ValueError(f"Invalid grid plan optimization mode: {self.grid_plan_optimization_mode}")    
+                raise ValueError(f"Invalid grid plan optimization mode: {self.grid_plan_optimization_mode}") 
+
+        print(optimal_plan)
+        print(least_e2e_latency)
+
+        exit(0)
     
     def _enumerate_grids(self, force_power_of_two: bool = True):
         """ Enumerate all candidate grids. 
