@@ -16,6 +16,7 @@ from megatron.core.utils import make_viewless_tensor
 
 from crius.train_backend.megatron.transformer_layer import TransformerLayer
 from crius.train_backend.megatron.utils import WrappedTensor
+from crius.global_envs import global_configs
 
 __all__ = [ "TransformerBlock", ]
 
@@ -51,7 +52,11 @@ class TransformerBlock(MegatronModule):
         if self.post_process and self.post_layer_norm:
             # self.final_layernorm = WrappedTorchLayerNorm(self.config, self.config.hidden_size, eps=self.config.layernorm_epsilon)
             self.final_layernorm = self.input_layernorm = torch.nn.LayerNorm(
-                self.config.hidden_size, eps=self.config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=self.config.params_dtype,
+                self.config.hidden_size, 
+                eps=self.config.layernorm_epsilon, 
+                # device=torch.cuda.current_device(), 
+                device=global_configs.current_device,
+                dtype=self.config.params_dtype,
             )
         else:
             self.final_layernorm = None  # Either this or nn.Identity

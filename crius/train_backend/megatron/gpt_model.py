@@ -17,7 +17,7 @@ from megatron.core.transformer.enums import ModelType
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, LanguageModelEmbedding
 from crius.train_backend.megatron.transformer_block import TransformerBlock
-from crius.global_envs import logger
+from crius.global_envs import logger, global_configs
 
 
 class GPTModel(LanguageModule):
@@ -42,7 +42,7 @@ class GPTModel(LanguageModule):
         position_embedding_type (Literal[learned_absolute,rope], optional):
             Position embedding type.. Defaults to 'learned_absolute'.
         device (Union[str, torch.device], optional):
-            Device to use. Defaults to torch.cuda.current_device().
+            Device to use. Defaults to gloal_configs.current_device.
     """
     
     def __init__(
@@ -58,7 +58,7 @@ class GPTModel(LanguageModule):
             'learned_absolute', 'rope', 'mrope', 'yarn', 'none'
         ] = 'learned_absolute',
         # scatter_embedding_sequence_parallel: bool = True,
-        device: Union[str, torch.device] = torch.cuda.current_device(),
+        device: Union[str, torch.device] = global_configs.current_device,
     ) -> None:
         super().__init__(config)
 

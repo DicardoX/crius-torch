@@ -5,18 +5,64 @@
 """ Utilities for Megatron backend. """
 
 import os
+from typing import Optional, Callable
+import operator
+from contextlib import contextmanager, nullcontext
+from functools import lru_cache, reduce, wraps
+
 import torch
 from megatron.core import parallel_state
+# from megatron.core.parallel_state import _GLOBAL_MEMORY_BUFFER
+from megatron.core.utils import GlobalMemoryBuffer
 
-from crius.global_envs import logger
+from crius.global_envs import logger, global_configs
 
 __all__ = [
+    "initialize_virtual_distributed",
     "initialize_distributed",
     "WrappedTensor",
 ]
 
 
-def initialize_distributed(tensor_model_parallel_size = 1, pipeline_model_parallel_size = 1):
+def initialize_virtual_distributed(
+    tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1,
+    num_nodes: int = 1, num_devices_per_node: int = 1,
+    init_cpu_process_group: bool = True,
+):
+    """ Initialize a virtual Megatron backend without ALL underlying physical deivces. 
+
+    By default, this function initializes a multi-process CPU process group.
+    
+    This function is used to initialize the Megatron backend for device-free operations,
+    such as device-free profiling or tuning. Notably, real training cannot be performed 
+    with this virtual backend. 
+
+    Args:
+        tensor_model_parallel_size: Degree of tensor model parallelism.
+        pipeline_model_parallel_size: Degree of pipeline model parallelism.
+        num_nodes: Number of virtual nodes allocated for the training task.
+        num_devices_per_node: Number of virtual devices per node.
+        init_cpu_process_group: Whether to initialize a multi-process CPU process group.
+    """
+
+    assert init_cpu_process_group
+    torchrun_world_size = int(os.environ['WORLD_SIZE'])
+    rank = int(os.environ['LOCAL_RANK'])
+    torch.distributed.init_process_group(world_size=torchrun_world_size, rank=rank, backend='gloo')
+
+    # Megatron core distributed training initialization
+    parallel_state.initialize_model_parallel()
+    # Overwrite Megatron's global memory buffer implementation as it forces CUDA tensors when adding a new 
+    # tensor to the buffer.
+    assert isinstance(parallel_state.get_global_memory_buffer(), GlobalMemoryBuffer)
+    parallel_state._GLOBAL_MEMORY_BUFFER = CPUCompatibleGlobalMemoryBuffer()
+    assert isinstance(parallel_state.get_global_memory_buffer(), CPUCompatibleGlobalMemoryBuffer)
+    logger.info(f"=========> Megatron distributed training initialized with rank {rank} and world size {torchrun_world_size}.")
+
+
+def initialize_distributed(
+    tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1,
+):
     """ Initialize the Megatron backend. 
     
     This function is used to initialize the Megatron backend for distributed training.
@@ -55,3 +101,35 @@ class WrappedTensor:
         if len(self._wrapper) == 0:
             raise RuntimeError(f"WrappedTensor has already been unwrapped")
         return self._wrapper.pop(0)
+
+
+class CPUCompatibleGlobalMemoryBuffer:
+    """
+    A CPU-compatible version of Megatron's GlobalMemoryBuffer to avoid dynamic memory allocations.
+    
+    Caller should ensure that buffers of the same name are not used concurrently.
+    """
+
+    def __init__(self):
+        self.buffer = {}
+
+    def get_tensor(self, tensor_shape, dtype, name, mem_alloc_context: Optional[Callable] = None):
+        """
+        Returns (potentially) a sub-tensor from the self.buffer for the given shape.
+        """
+        required_len = reduce(operator.mul, tensor_shape, 1)
+        if (
+            self.buffer.get((name, dtype), None) is None
+            or self.buffer[(name, dtype)].numel() < required_len
+        ):
+            mem_alloc_context = mem_alloc_context if mem_alloc_context else nullcontext
+            with mem_alloc_context():
+                self.buffer[(name, dtype)] = torch.empty(
+                    required_len,
+                    dtype=dtype,
+                    # device=torch.cuda.current_device(),
+                    device=global_configs.current_device,
+                    requires_grad=False,
+                )
+
+        return self.buffer[(name, dtype)][0:required_len].view(*tensor_shape)

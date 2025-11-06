@@ -20,6 +20,7 @@ from megatron.core.transformer.utils import attention_mask_func
 from megatron.core import parallel_state, tensor_parallel
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+from crius.global_envs import global_configs
 
 __all__ = [ "SelfAttention", ]
 
@@ -63,7 +64,8 @@ class SelfAttention(MegatronModule):
             output_size=(self.query_projection_size + 2 * self.kv_projection_size),
             tp_size=self.config.tensor_model_parallel_size,
             bias=self.config.add_bias_linear or self.config.add_qkv_bias,
-            device=torch.cuda.current_device(),
+            # device=torch.cuda.current_device(),
+            device=global_configs.current_device,
             dtype=config.params_dtype,
             skip_bias_add=False,
         )
@@ -79,7 +81,8 @@ class SelfAttention(MegatronModule):
             output_size=self.config.hidden_size,
             tp_size=self.config.tensor_model_parallel_size,
             bias=self.config.add_bias_linear,
-            device=torch.cuda.current_device(),
+            # device=torch.cuda.current_device(),
+            device=global_configs.current_device,
             dtype=config.params_dtype,
             input_is_parallel=True,
             skip_bias_add=False,
@@ -304,6 +307,8 @@ class DotProductAttention(MegatronModule):
         key = key.view(output_size[3], output_size[0] * output_size[1], -1)
 
         # preallocting input tensor: [b * np, sq, sk]
+        # Megatron's global memory buffer is located on cuda device by default
+        # We need to explicitly overwrite this buffer ouside model definition
         matmul_input_buffer = parallel_state.get_global_memory_buffer().get_tensor(
             (output_size[0] * output_size[1], output_size[2], output_size[3]), query.dtype, "mpu"
         )

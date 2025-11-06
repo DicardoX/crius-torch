@@ -13,6 +13,7 @@ from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+from crius.global_envs import global_configs
 
 __all__ = [ "MLP", ]
 
@@ -64,7 +65,8 @@ class MLP(MegatronModule):
             ffn_hidden_size,
             tp_size=self.config.tensor_model_parallel_size,
             bias=self.config.add_bias_linear,
-            device=torch.cuda.current_device(),
+            # device=torch.cuda.current_device(),
+            device=global_configs.current_device,
             dtype=self.config.params_dtype,
             skip_bias_add=True,
         )
@@ -76,7 +78,8 @@ class MLP(MegatronModule):
             self.config.hidden_size,
             tp_size=self.config.tensor_model_parallel_size,
             bias=self.config.add_bias_linear,
-            device=torch.cuda.current_device(),
+            # device=torch.cuda.current_device(),
+            device=global_configs.current_device,
             dtype=self.config.params_dtype,
             input_is_parallel=True,
             skip_bias_add=True,

@@ -55,6 +55,10 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
         return None
     
     from torch.fx.passes.shape_prop import ShapeProp, TensorMetadata
+
+    print(input_args, input_kwargs)
+    
+    exit(0)
     
     # .propagate() only takes positional args
     all_args = (*input_args, *input_kwargs.values())

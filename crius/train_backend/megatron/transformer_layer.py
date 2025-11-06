@@ -18,6 +18,7 @@ from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 
 from crius.train_backend.megatron.attention import SelfAttention
 from crius.train_backend.megatron.mlp import MLP
+from crius.global_envs import global_configs
 
 __all__ = [ "TransformerLayer", ]
 
@@ -43,7 +44,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # [Module 1: Input Layernorm] Optional Layernorm on the input data
         # self.input_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
         self.input_layernorm = torch.nn.LayerNorm(
-            config.hidden_size, eps=config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=config.params_dtype,
+            config.hidden_size, 
+            eps=config.layernorm_epsilon, 
+            # device=torch.cuda.current_device(), 
+            device=global_configs.current_device,
+            dtype=config.params_dtype,
         )
 
         # [Module 2: SelfAttention]
@@ -55,7 +60,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # [Module 7: Pre MLP] Optional Layernorm before MLP
         # self.pre_mlp_layernorm = WrappedTorchLayerNorm(config, config.hidden_size, eps=config.layernorm_epsilon)
         self.pre_mlp_layernorm = torch.nn.LayerNorm(
-            config.hidden_size, eps=config.layernorm_epsilon, device=torch.cuda.current_device(), dtype=config.params_dtype,
+            config.hidden_size, 
+            eps=config.layernorm_epsilon, 
+            # device=torch.cuda.current_device(), 
+            device=global_configs.current_device,
+            dtype=config.params_dtype,
         )
 
         # [Module 8: MLP block]

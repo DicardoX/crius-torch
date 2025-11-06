@@ -48,6 +48,10 @@ class GlobalEnvConfigs:
     per_device_memory_capacity_in_gb: float = 40.0
     """ Memory capacity (in GB) of the target compute device. """
 
+    current_device: torch.device = torch.device("cpu")
+    """ Current compute device of this rank, used for tensor instantiation in internal NN modules to replace 
+    `torch.cuda.current_device()`. """
+
     #####################
     # Model Parallelism #
     #####################

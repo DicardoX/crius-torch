@@ -36,7 +36,7 @@ class ParallelTuneTest(unittest.TestCase):
         # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
-        from crius.train_backend.megatron.utils import initialize_distributed
+        from crius.train_backend.megatron.utils import initialize_distributed, initialize_virtual_distributed
         from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
         from crius.train_backend.megatron.transformer_layer import TransformerLayer
         from crius.train_backend.megatron.gpt_model import GPTModel
@@ -55,7 +55,8 @@ class ParallelTuneTest(unittest.TestCase):
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
-        device = "cuda"
+        # device = "cuda"
+        device = "cpu"
         vocab_size = 50000
         
         global_configs.num_nodes = 1
@@ -63,6 +64,7 @@ class ParallelTuneTest(unittest.TestCase):
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
+        global_configs.current_device = torch.device("cpu") if device == "cpu" else torch.cuda.current_device()
 
         # Prototype of parallelism plan
         pipeline_stage_partition_method = "uniform"
@@ -101,9 +103,11 @@ class ParallelTuneTest(unittest.TestCase):
         }
 
         # Init distributed
-        initialize_distributed(
-            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        initialize_virtual_distributed(
+            # tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            # pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_nodes=global_configs.num_nodes,
+            num_devices_per_node=global_configs.num_devices_per_node,
         )
         model_parallel_cuda_manual_seed(1234)
 
