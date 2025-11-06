@@ -13,7 +13,8 @@ from crius.offline.offline_recorder import OfflineDataRecorder
 import gc
 
 class CommunicationProfiler:
-    def __init__(self, world_size, rank, backend="nccl"):
+    def __init__(self, node_num, world_size, rank, backend="nccl"):
+        self.node_num = node_num
         self.world_size = world_size
         self.rank = rank
         self.backend = backend
@@ -35,7 +36,7 @@ class CommunicationProfiler:
         fn(*args, **kwargs)
         torch.cuda.synchronize()  
         end = time.time()
-        local_latency_ms = torch.tensor([(end - start) * 1000], dtype=torch.float64, device="cuda")
+        local_latency_ms = torch.tensor([(end - start) * 1000], dtype=torch.float16, device="cuda")
 
         dist.all_reduce(local_latency_ms, op=dist.ReduceOp.MAX)
         return local_latency_ms.item()
@@ -49,14 +50,18 @@ class CommunicationProfiler:
         gather_list = [torch.zeros(tensor_size, device="cuda") for _ in range(self.world_size)]
         return self.measure_latency(dist.all_gather, gather_list, tensor)
 
-    def run_profile(self, group_size, tensor_sizes):
-        recorder = OfflineDataRecorder()
+    def run_profile(self, node_num, group_size, tensor_sizes):
+        recorder = OfflineDataRecorder(
+            to_store_path = "./crius/offline",
+            data_filename = "prof_comm_data.pkl",
+            force_overwrite = True
+        )
 
         for tensor_size in tensor_sizes: 
             all_reduce_latency_ms = self.profile_all_reduce(tensor_size)
 
             if self.rank == 0:
-                query_key = OfflineDataRecorder.get_query_key("all_reduce", None, None, None, None, None, group_size, tensor_size)
+                query_key = OfflineDataRecorder.get_query_key("all_reduce", None, None, None, None, None, node_num, group_size, tensor_size)
                 recorder._check_cache(query_key, "all_reduce", group_size, tensor_size)
 
             # Reset
@@ -94,25 +99,28 @@ class CommunicationProfiler:
 
 if __name__ == "__main__":
     world_size = int(os.environ["WORLD_SIZE"])
+    local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
     rank = int(os.environ["LOCAL_RANK"])
 
-    profiler = CommunicationProfiler(world_size, rank)
+    node_num = (world_size - 1) // local_world_size + 1
+
+    profiler = CommunicationProfiler(node_num, world_size, rank)
 
     tensor_sizes = [
                 1024, 4096, 8192, 
                 
-                16384, 24576, 32768, 65536, 
+                16384, 24576, 32768, 49152, 65536, 
                 
                 262144, 640000, 
                 
-                1572864, 2097152, 8388608, 1048576, 4194304, 
+                1280000, 1572864, 2097152, 8388608, 1048576, 4194304, 
                 
                 16777216, 25165824, 25600000, 33554432,      
 
                 67108864, 134217728, 268435456     
             ]
 
-    profiler.run_profile(world_size, tensor_sizes)
+    profiler.run_profile(node_num, world_size, tensor_sizes)
 
     # for tensor_size in tensor_sizes:
     #     results = profiler.run_profile(tensor_sizes)

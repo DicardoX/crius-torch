@@ -416,5 +416,5 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             pass    # Directly return out_grad, which are the same across all ranks, as outputs are the same after allreduce in forward
         else:
             pass    # Other non-dominant operators
-    # print(bw_graph)
+    print(bw_graph)
     return bw_graph

@@ -255,7 +255,7 @@ class CriusOfflineDataManager:
                         """LAYOUT_INPUT_GRAD_1"""
                         # Generate query_key and check cache
                         gemm_input_grad_layout = "b:s:h1,h1:h2"
-                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None)
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None, None)
                         recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
 
                         # Reset
@@ -271,7 +271,7 @@ class CriusOfflineDataManager:
                         """LAYOUT_INPUT_GRAD_2"""
                         # Generate query_key and check cache
                         gemm_input_grad_layout = "b:s:h2,h2:h1"
-                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None)
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None, None)
                         recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
 
                         # Reset
@@ -287,7 +287,7 @@ class CriusOfflineDataManager:
                         """LAYOUT-WEIGHT_GRAD"""
                         # Generate query_key and check cache
                         gemm_weight_grad_layout = "b:h1:s,b:s:h2"
-                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout, None, None)
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout, None, None, None)
                         recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout)
 
                         # Reset
@@ -368,7 +368,7 @@ class CriusOfflineDataManager:
                     """LAYOUT_INPUT_GRAD"""
                     # Generate query_key and check cache
                     reduce_sum_layout = "b:h1:h2"
-                    query_key = OfflineDataRecorder.get_query_key("reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, reduce_sum_layout, None, None)
+                    query_key = OfflineDataRecorder.get_query_key("reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, reduce_sum_layout, None, None, None)
                     recorder._check_cache(query_key, "REDUCE_SUM", bs, 0, left_hidden_dim, right_hidden_dim, reduce_sum_layout)
 
                     # Reset
@@ -495,7 +495,7 @@ class CriusOfflineDataManager:
                     """LAYOUT_1"""
                     # Generate query_key and check cache
                     bmm_layout_1 = "b:s:h1,b:h1:s"
-                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_1, None, None)
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_1, None, None, None)
                     recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_1)
 
                     # Reset
@@ -511,7 +511,7 @@ class CriusOfflineDataManager:
                     """LAYOUT_2"""
                     # Generate query_key and check cache
                     bmm_layout_2 = "b:s:s,b:s:h1"
-                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_2, None, None)
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_2, None, None, None)
                     recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_2)
 
                     # Reset
@@ -527,7 +527,7 @@ class CriusOfflineDataManager:
                     """LAYOUT_3"""
                     # Generate query_key and check cache
                     bmm_layout_3 = "b:h1:s,b:s:s"
-                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_3, None, None)
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_3, None, None, None)
                     recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_3)
 
                     # Reset
@@ -612,7 +612,7 @@ class CriusOfflineDataManager:
                     """LAYOUT_INPUT_GRAD"""
                     # Generate query_key and check cache
                     baddbmm_layout = "b:s:s,b:s:h1,b:h1:s"
-                    query_key = OfflineDataRecorder.get_query_key("baddbmm", bs, seq_len, baddbmm_hidden_dim, None, baddbmm_layout, None, None)
+                    query_key = OfflineDataRecorder.get_query_key("baddbmm", bs, seq_len, baddbmm_hidden_dim, None, baddbmm_layout, None, None, None)
                     recorder._check_cache(query_key, "BADDBMM", bs, seq_len, baddbmm_hidden_dim, 0, baddbmm_hidden_dim)
 
                     # Reset
@@ -638,6 +638,7 @@ class CriusOfflineDataManager:
 
         # TODO(chunyu): Implementing offline all-reduce profiler...
         commands = [
+        # "torchrun --nnodes=1 --nproc_per_node=1 /app/crius/offline/offline_comm_profile_util.py",
         "torchrun --nnodes=1 --nproc_per_node=2 /app/crius/offline/offline_comm_profile_util.py",
         "torchrun --nnodes=1 --nproc_per_node=4 /app/crius/offline/offline_comm_profile_util.py", 
         # "torchrun --nnodes=1 --nproc_per_node=8 /app/crius/offline/offline_comm_profile.py"

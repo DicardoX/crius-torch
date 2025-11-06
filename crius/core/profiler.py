@@ -12,6 +12,7 @@ import numpy as np
 import pickle
 
 import torch
+import re
 from torch import nn
 
 from crius.model_parallel.utils import ParallelismPlan
@@ -27,9 +28,17 @@ class CriusDistProfiler:
     This module provides (1) operator disaggregation and (2) Device-free model profiling.
     """
 
-    def __init__(self, profiled_data_path: Optional[str] = None) -> None:
-        self._profiled_data = self._load_profiled_data(profiled_data_path)
+    def __init__(
+        self, 
+        profiled_cmpt_data_path: Optional[str] = None, 
+        profiled_comm_data_path: Optional[str] = None
+    ) -> None:
+        self._profiled_cmpt_data = self._load_profiled_data(profiled_cmpt_data_path)
+        self._profiled_comm_data = self._load_profiled_data(profiled_comm_data_path)
 
+        self.MAX_COMM_SIZE = 1 << 28
+        self.LARGE_COMM_SCALE_FACTOR = 1.1
+        
     def _load_profiled_data(self, profiled_data_path: Optional[str] = None) -> None:
         """ Load profiled data from the given path. 
         
@@ -109,6 +118,88 @@ class CriusDistProfiler:
     def _query_operator_latencies_ms(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: IRGraph = None):
         """ Query operator latencies(ms) from offline profiled data. """
 
+        def _get_comm_time_table() -> dict:
+            """ Match target patterns from the loaded content. """
+            pattern = r'^(all_reduce|all_gather|all_to_all|reduce_scatter)_n(\d+)_gs(\d+)_d(\d+)$'
+            comm_time_table = {}
+
+            for key, vdict in self._profiled_comm_data.items():
+                match = re.match(pattern, key)
+                if match:
+                    op_type = match.group(1)       
+                    n  = int(match.group(2))         
+                    gs = int(match.group(3))        
+                    d  = int(match.group(4))         
+                else:
+                    raise ValueError(f"Unable to parse key: {key}")  
+                    
+                _key = f'{op_type}_n{n}_gs{gs}'
+                if _key not in comm_time_table:
+                    comm_time_table[_key] = []
+                else:
+                    comm_time_table[_key].append([d, vdict['latency_ms']])
+                    
+            # print(comm_time_table)                 
+
+            return comm_time_table
+
+        def _estimate_comm_op_time(
+            op_type: str, 
+            num_node: int, 
+            group_size: int, 
+            comm_size: int, 
+            # dtype: Any, 
+            comm_time_table: dict, 
+        ):
+            """ Estimate the time of the communication operator based on offline profiling results. """
+            # Querying key
+            key = f'{op_type}_n{num_node}_gs{group_size}'
+
+            # Estimate comm time
+            last_comm_size, last_comm_time = -1, -1
+            # dtype = str(dtype)
+
+            # FIXME(junzhou): Assuming that comm_size denotes the number of parameter, and default type is torch.float16 . 
+            # if dtype in DTYPE_TO_F32_RATIO_TABLE:
+            #     # Resize comm_size based on dtype
+            #     comm_size *= DTYPE_TO_F32_RATIO_TABLE[dtype]
+            #     dtype = "float32"
+
+            if comm_size <= comm_time_table[key][0][0]:
+                return comm_time_table[key][0][1]
+            
+            for _i, (_comm_size, _comm_time) in enumerate(comm_time_table[key]):
+                # assert dtype == "float32", f"Currently only support data type with float32, got {dtype}."
+        
+                if _comm_size >= comm_size:
+                    # Linear interpolate
+                    _ratio = (comm_size - last_comm_size) / (_comm_size - last_comm_size)
+                    return last_comm_time + (_comm_time - last_comm_time) * _ratio
+                last_comm_size, last_comm_time = _comm_size, _comm_time
+
+            # Exceed max profiled comm size
+            max_profiled_comm_size = comm_time_table[key][-1][0]
+            # Decompose communication size into profiled scope
+            max_profiled_cnt = comm_size // max_profiled_comm_size
+            rest_comm_time = _estimate_comm_op_time(op_type, num_node, group_size, (comm_size % max_profiled_comm_size,), comm_time_table)
+            max_comm_time = comm_time_table[key][-1][1]
+
+            # if True:
+            if max_profiled_comm_size < MAX_COMM_SIZE // 2:
+                # Only for low bandwidth cases, which linearly scale the comm time
+                est_comm_time = max_profiled_cnt * max_comm_time + rest_comm_time
+            else:    
+                # When comm amount is extremely large, comm time scales a little faster than linearly scaling 
+                # probably due to network interference.
+                est_comm_time = (max_profiled_cnt * max_comm_time + rest_comm_time) \
+                                * pow(LARGE_COMM_SCALE_FACTOR, max_profiled_cnt)
+            
+            print(f"[WARN] Communication size of '{op_type}' excceeds the maximum profiled size. Linear scaling is applied.")
+            print(f"       - Communication size of the operator: {comm_size} | Estimated comm time: {est_comm_time}")
+            print(f"       - Max profiled communication size: {max_profiled_comm_size} | Comm time: {max_comm_time}")
+            
+            return est_comm_time
+        
         def __query_one_graph(graph_): 
             for node in graph_.nodes:
                 if (
@@ -116,17 +207,18 @@ class CriusDistProfiler:
                     "unknown" not in node.layer_type
                 ):
                     node_latency = 0.0
-                    if self._profiled_data is not None:
+                    if (self._profiled_cmpt_data is not None) and (self._profiled_comm_data is not None):
                         # Query the latency from the profiled data
                         input_shapes, output_shapes = node.input_shapes, node.output_shapes
                         batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, layout = None, None, None, None, None
-                        comm_group_size, comm_data_size = None, None
+                        num_node, comm_group_size, comm_data_size = None, None, None
 
                         if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
                             if node.node_parallelism is None:
                                 continue    # This node is a not-used placeholder (not defined in comm op insertion 
                                             # rules) in model forward definition.
 
+                            num_node = global_configs.num_nodes
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
@@ -154,10 +246,23 @@ class CriusDistProfiler:
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, node.layout,  
                             comm_group_size, comm_data_size,
                         )
-                        if query_key in self._profiled_data:
-                            node_latency = self._profiled_data[query_key]["latency_ms"]
+                        if   query_key in self._profiled_cmpt_data:
+                            node_latency = self._profiled_cmpt_data[query_key]["latency_ms"]
+                        elif query_key in self._profiled_comm_data:
+                            node_latency = self._profiled_comm_data[query_key]["latency_ms"]
                         else:
-                            logger.warning(f"Query key [ {query_key} ] from node {node.target} not found in profiled data, using default latency {node_latency}ms.")
+                            """
+                            COMM INTERPOLATION
+                            """
+                            if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
+                                if node.node_parallelism is None:
+                                    continue    # This node is a not-used placeholder (not defined in comm op insertion 
+                                                # rules) in model forward definition.
+
+                                comm_time_table = _get_comm_time_table()
+                                node_latency = _estimate_comm_op_time(node.layer_type, num_node, comm_group_size, comm_data_size, comm_time_table)
+                            else:
+                                logger.warning(f"Query key [ {query_key} ] from node {node.target} not found in profiled data, using default latency {node_latency}ms.")
                     
                     setattr(node, "latency", node_latency)
                 else:

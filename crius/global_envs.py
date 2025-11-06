@@ -39,6 +39,9 @@ class GlobalEnvConfigs:
     #####################
     # Model Parallelism #
     #####################
+    num_nodes: int = 2
+    """ Number of nodes. """
+
     tensor_model_parallel_size: int = 1
     """ Intra-layer model parallelism. Splits tensors across GPU ranks. """
 

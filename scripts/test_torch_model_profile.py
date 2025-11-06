@@ -369,7 +369,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -379,19 +379,19 @@ class TorchModelProfileTest(unittest.TestCase):
             min_batch_size=128,
             max_batch_size=128,
             batch_size_step="power-of-2",
-            min_seq_len=1,
-            max_seq_len=4,
+            min_seq_len=128,
+            max_seq_len=128,
             # max_seq_len=128,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims =[64, 128, 192, 256, 5000],
+            gemm_left_op_hidden_dims =[128, 512],
             # gemm_left_op_hidden_dims =[128, 256, 5000],
-            gemm_right_op_hidden_dims=[64, 128, 192, 256, 5000],
+            gemm_right_op_hidden_dims=[128, 10000],
             # gemm_right_op_hidden_dims =[128, 256, 5000],
-            reduce_sum_left_op_hidden_dims =[64, 128, 192, 256, 5000],
-            reduce_sum_right_op_hidden_dims=[64, 128, 192, 256, 5000],
-            bmm_op_hidden_dims =[64, 1024, 2048],
+            reduce_sum_left_op_hidden_dims =[128,],
+            reduce_sum_right_op_hidden_dims=[10000],
+            bmm_op_hidden_dims =[128],
             # bmm_right_op_hidden_dims=[512, 1024, 1536, 2048, 25000],
-            baddbmm_op_hidden_dims =[64, 1024, 2048],
+            baddbmm_op_hidden_dims =[128],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -404,11 +404,11 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile_all_gemm()
+        # offline_profiler.profile_all_gemm()
         # offline_profiler.profile_all_baddbmm()
         # offline_profiler.profile_all_reduce_sum()
         # offline_profiler.profile_all_bmm()
-        # offline_profiler.profile_all_comm()
+        offline_profiler.profile_all_comm()
 
     @unittest.skip("Pass.")
     def test_torch_model_profiling(self):
@@ -641,7 +641,7 @@ class TorchModelProfileTest(unittest.TestCase):
         use_toy = False
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 2
         global_configs.only_forward = False
@@ -771,7 +771,8 @@ class TorchModelProfileTest(unittest.TestCase):
             }
 
         profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
+            profiled_cmpt_data_path='./crius/offline/prof_data.pkl',
+            profiled_comm_data_path='./crius/offline/prof_comm_data.pkl',
         )
         e2e_latency = profiler.profile(
             model=model,
@@ -819,25 +820,6 @@ class TorchModelProfileTest(unittest.TestCase):
         data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, torch.long, device) 
                 for _ in range(num_micro_batches)]
         # print(data)
-
-        # data = [
-        #     torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=dtype, device=device)
-        #         for _ in range(num_micro_batches)
-        # ]
-        # input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        # position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
-        # attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
-        # decoder_input = None
-        # labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        # input_args = ()
-        # input_kwargs = {
-        #     "input_ids": input_ids,
-        #     "position_ids": position_ids,
-        #     "attention_mask": attention_mask,
-        #     "decoder_input": decoder_input,
-        #     "labels": labels,
-        # }
-
         
         # Warmup
         for _ in range(100):
