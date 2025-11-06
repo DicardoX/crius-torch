@@ -55,8 +55,8 @@ class ParallelTuneTest(unittest.TestCase):
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
-        # device = "cuda"
-        device = "cpu"
+        device = "cuda"
+        # device = "cpu"
         vocab_size = 50000
         
         global_configs.num_nodes = 1
@@ -65,6 +65,8 @@ class ParallelTuneTest(unittest.TestCase):
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
         global_configs.current_device = torch.device("cpu") if device == "cpu" else torch.cuda.current_device()
+        assert str(global_configs.current_device) != "cpu", \
+            "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation."
 
         # Prototype of parallelism plan
         pipeline_stage_partition_method = "uniform"
@@ -108,6 +110,7 @@ class ParallelTuneTest(unittest.TestCase):
             # pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             num_nodes=global_configs.num_nodes,
             num_devices_per_node=global_configs.num_devices_per_node,
+            init_cpu_process_group=True,
         )
         model_parallel_cuda_manual_seed(1234)
 

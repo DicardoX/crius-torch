@@ -55,14 +55,12 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
         return None
     
     from torch.fx.passes.shape_prop import ShapeProp, TensorMetadata
-
-    print(input_args, input_kwargs)
-    
-    exit(0)
     
     # .propagate() only takes positional args
     all_args = (*input_args, *input_kwargs.values())
 
+    # assert str(global_configs.current_device) != "cpu", \
+    #     "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation."
     ShapeProp(graph.owning_module).propagate(*all_args)
     graph_ = graph.owning_module.graph
     for i, node in enumerate(graph_.nodes):
