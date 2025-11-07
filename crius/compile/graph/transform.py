@@ -205,6 +205,7 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
         # Traverse the node to insert
         after_markers = comm_op_insert_rules[comm_primitive_str].get("after_markers", [])
         after_nodes = comm_op_insert_rules[comm_primitive_str].get("after_nodes", [])
+        skip_first_n = comm_op_insert_rules[comm_primitive_str].get("skip_first_n", 0)
         interval = comm_op_insert_rules[comm_primitive_str].get("interval", 1)
         node_pass = comm_op_insert_rules[comm_primitive_str].get("pass", "forward")
         node_parallelism = comm_op_insert_rules[comm_primitive_str].get("parallelism", "tp")
@@ -222,6 +223,9 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                         continue    # Node target not matched
 
                     after_node_num += 1
+                    if after_node_num <= skip_first_n:
+                        continue    # Skip the first n matched nodes
+
                     if after_node_num % interval != 0:
                         continue    # We insert every `interval` matched nodes
 
@@ -262,8 +266,8 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                     if node_pass != "backward":
                         continue
                     
-                    assert comm_primitive not in str(node.next.target), \
-                        "In manually constructed backward graph, no communication operator should be included at first."
+                    # assert comm_primitive not in str(node.next.target), \
+                        # "In manually constructed backward graph, no communication operator should be included at first."
                     
                     # Insert a communication node
                     with graph.inserting_after(node):
@@ -288,6 +292,10 @@ def _infer_comm_node_input_output_shapes(
         # All-reduce the weight gradients (output) of previous node
         assert len(prev_node.output_shapes[0]) == 2     # [h1, h2]
         input_shapes = output_shapes = prev_node.output_shapes
+    elif primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "tp":
+        # All-reduce the activation gradients (input) of previous node
+        assert len(prev_node.input_shapes[0]) == 3      # [b, s, h2]
+        input_shapes = output_shapes = prev_node.input_shapes
     else:
         raise NotImplementedError("Unsupport case when inferring input/output shapes of communication node.")
     

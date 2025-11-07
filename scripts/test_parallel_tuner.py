@@ -91,7 +91,7 @@ class ParallelTuneTest(unittest.TestCase):
 
         # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
-            "all_reduce:tp": {
+            "all_reduce:tp:forward": {
                 # "after_nodes": ['fc2', ],
                 # "after_nodes": ['matmul', ],
                 "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
@@ -100,12 +100,20 @@ class ParallelTuneTest(unittest.TestCase):
                 "pass": 'forward',
                 "parallelism": 'tp',
             },
-            "all_reduce:dp": {
+            "all_reduce:dp:backward": {
                 "after_markers": [],
                 "after_nodes": ['weight_grad_reduce_sum', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',
+            },
+            "all_reduce:tp:backward": {
+                "after_markers": [],
+                "after_nodes": ['weight_grad_reduce_sum', ],
+                "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
+                "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
+                "pass": 'backward',
+                "parallelism": 'tp',
             },
         }
 

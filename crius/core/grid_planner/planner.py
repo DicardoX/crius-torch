@@ -223,9 +223,6 @@ class CriusParallelPlanner:
         if dp_prioritized:
             # A workaround for TP/DP selection, prioritizing DP
             return parallelism_plan.data_parallel_degree * 1024 + parallelism_plan.tensor_parallel_degree
-        
-        # TODO(chunyu): Implement cost estimation for all communication primitives
-        raise NotImplementedError
 
         (max_stage_weight_mem, max_stage_act_mem, 
          max_stage_optim_mem, max_stage_grad_mem) = self._estimate_model_memory_access_gb(parallelism_plan)
@@ -239,11 +236,12 @@ class CriusParallelPlanner:
             [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
         for node in list(graph.nodes) + list(bw_graph.nodes):
-            if node.layer_type not in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+            if (
+                node.layer_type not in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all") or
+                node.node_parallelism is None   # This node is a not-used placeholder (not defined in comm op 
+                                                # insertion rules) in model forward definition.
+            ):
                 continue
-
-            print(parallelism_plan.tensor_parallel_degree, parallelism_plan.data_parallel_degree, parallelism_plan.pipeline_parallel_degree)
-            print(node.node_parallelism)
 
             nbytes_per_numel = dtype_to_bytes.get(parallelism_plan.comm_data_type, 4)  
             assert len(node.input_shapes) == 1
@@ -254,26 +252,31 @@ class CriusParallelPlanner:
             elif node.node_parallelism == "dp":
                 n_ranks = parallelism_plan.data_parallel_degree
             else:
-                raise ValueError(f"Invalid node parallelism type: {node.node_parallelism}")
-            
-            print(node.layer_type, comm_tensor_shape, n_ranks, nbytes_per_numel, node.node_pass)
+                raise ValueError(f"Invalid node parallelism type: {node.node_parallelism} of " + 
+                                 f"node {node.target} in pass {node.node_pass}.")
 
             if node.layer_type == "all_reduce":
                 # Communication volume = 2 * comm_size * (n_ranks - 1) / n_ranks
                 comm_volume_in_bytes = 2 * np.prod(list(comm_tensor_shape)) * nbytes_per_numel * (n_ranks - 1) / n_ranks
-            elif node.layer_type == "all_gather":
-                raise NotImplementedError
-            elif node.layer_type == "reduce_scatter":
-                raise NotImplementedError
-            elif node.layer_type == "all_to_all":
-                raise NotImplementedError
+            elif node.layer_type in ("all_gather", "reduce_scatter", "all_to_all"):
+                # Communication volume = comm_size * (n_ranks - 1) / n_ranks
+                comm_volume_in_bytes = np.prod(list(comm_tensor_shape)) * nbytes_per_numel * (n_ranks - 1) / n_ranks
             
+            if not (
+                node.node_pass == "backward" and node.node_parallelism == "dp" and node.layer_type == "all_reduce" 
+            ):
+                # Per-microbatch called cases
+                comm_volume_in_bytes *= parallelism_plan.num_microbatches
+            
+            comm_volume_in_bytes = float(comm_volume_in_bytes)
             if node.node_pass == "forward":
                 stage_comm_costs[node.stage_index] += comm_volume_in_bytes
             elif node.node_pass == "backward":
                 bw_stage_comm_costs[node.stage_index] += comm_volume_in_bytes
             else:
                 raise ValueError(f"Invalid node pass type: {node.node_pass}")
+        
+        print(stage_comm_costs, bw_stage_comm_costs)
 
         # FIXME(chunyu): Use the "communication load" metric proposed in the paper
         total_comm_cost =  np.sum(stage_comm_costs) + np.sum(bw_stage_comm_costs)

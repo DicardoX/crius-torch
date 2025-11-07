@@ -79,6 +79,7 @@ class GlobalEnvConfigs:
         "all_reduce:tp": {
             "after_markers": ['mlp_linear_fc2_weight', ]    # Insert all-reduce after the marker (identify which high-level operator)
             "after_nodes": ['contiguous', ],                # Insert all-reduce after nodes with keywords 'contiguous', which belong to an after_marker
+            "skip_first_n": 0,                              # Skip the first n nodes matched
             "interval": 1,                                  # Interval to insert, 1 means inserting every `after_node`
             "pass": 'forward',                              # Which pass is this communication operator inserted ('backward' for DP)
             "parallelism": 'tp',                            # Which parallelism does this communication operator belong to
