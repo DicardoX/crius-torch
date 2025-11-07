@@ -215,12 +215,17 @@ class CriusParallelPlanner:
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {self._proto_plan.pipeline_stage_partition_method}")
 
-    def _evaluate_communication_cost_with_oom_check(self, parallelism_plan: ParallelismPlan) -> float:
+    def _evaluate_communication_cost_with_oom_check(
+        self, parallelism_plan: ParallelismPlan, dp_prioritized: bool = False,
+    ) -> float:
         """ Evaluate the communication cost of the model under the given parallelism plan and check OOM. """
         
-        if True:
+        if dp_prioritized:
             # A workaround for TP/DP selection, prioritizing DP
             return parallelism_plan.data_parallel_degree * 1024 + parallelism_plan.tensor_parallel_degree
+        
+        # TODO(chunyu): Implement cost estimation for all communication primitives
+        raise NotImplementedError
 
         (max_stage_weight_mem, max_stage_act_mem, 
          max_stage_optim_mem, max_stage_grad_mem) = self._estimate_model_memory_access_gb(parallelism_plan)

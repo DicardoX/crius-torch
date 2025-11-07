@@ -135,8 +135,8 @@ class ParallelTuneTest(unittest.TestCase):
         setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
 
         # Model
-        _model_loader_class = ShadowModelLoader
-        # _model_loader_class = ModelLoader
+        _model_loader_class = ShadowModelLoader if global_configs.use_shadow_model_loader else ModelLoader
+        kwargs = {"device_str": device} if not global_configs.use_shadow_model_loader else {"fake_device_str": device}
         model_loader = _model_loader_class(
             model_provider=model_provider,
             model_kwargs={
@@ -148,8 +148,7 @@ class ParallelTuneTest(unittest.TestCase):
                 "dtype": dtype,
                 "megatron_config": megatron_config,
             },
-            # device_str=device,
-            fake_device_str=device,
+            **kwargs,
         )
         model = model_loader.load()
 
