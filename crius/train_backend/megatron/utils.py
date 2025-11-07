@@ -31,7 +31,8 @@ def initialize_virtual_distributed(
 ):
     """ Initialize a virtual Megatron backend without ALL underlying physical deivces. 
 
-    By default, this function initializes a multi-process CPU process group.
+    By default, this function initializes a multi-process CPU process group. This function 
+    should be called by `torchrun --nproc-per-node #proc [python script]`.
     
     This function is used to initialize the Megatron backend for device-free operations,
     such as device-free profiling or tuning. Notably, real training cannot be performed 

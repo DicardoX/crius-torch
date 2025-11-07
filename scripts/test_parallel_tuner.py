@@ -17,7 +17,7 @@ from torch import nn
 from crius.loader import (ModelLoader, ShadowModelLoader)
 from crius.model_parallel.utils import ParallelismPlan
 from crius.core.tuner import CriusParallelTuner
-from crius.global_envs import global_configs
+from crius.global_envs import global_configs, logger
 
 
 class ParallelTuneTest(unittest.TestCase):
@@ -55,18 +55,23 @@ class ParallelTuneTest(unittest.TestCase):
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
-        device = "cuda"
-        # device = "cpu"
+        # device = "cuda"
+        device = "cpu"
         vocab_size = 50000
         
         global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 2
+        global_configs.num_devices_per_node = 4
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
-        global_configs.current_device = torch.device("cpu") if device == "cpu" else torch.cuda.current_device()
-        assert str(global_configs.current_device) != "cpu", \
-            "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation."
+        if device == "cpu":
+            logger.warning(
+                "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +
+                "Currently we recommend using shadow model loader to reduce device memory consumption."
+            )
+            device = "cuda"
+            global_configs.current_device = torch.cuda.current_device()
+            global_configs.use_shadow_model_loader = True
 
         # Prototype of parallelism plan
         pipeline_stage_partition_method = "uniform"
@@ -130,8 +135,8 @@ class ParallelTuneTest(unittest.TestCase):
         setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
 
         # Model
-        # _model_loader_class = ShadowModelLoader
-        _model_loader_class = ModelLoader
+        _model_loader_class = ShadowModelLoader
+        # _model_loader_class = ModelLoader
         model_loader = _model_loader_class(
             model_provider=model_provider,
             model_kwargs={
@@ -143,8 +148,8 @@ class ParallelTuneTest(unittest.TestCase):
                 "dtype": dtype,
                 "megatron_config": megatron_config,
             },
-            device_str=device,
-            # fake_device_str=device,
+            # device_str=device,
+            fake_device_str=device,
         )
         model = model_loader.load()
 

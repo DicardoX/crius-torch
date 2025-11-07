@@ -36,6 +36,9 @@ class GlobalEnvConfigs:
     training_backend: str = "megatron"
     """ Training backend used for model training. Options: ['megatron', ] """
 
+    use_shadow_model_loader: bool = False
+    """ Whether to use shadow model loader to reduce device memory consumption during model loading."""
+
     ###########################
     # Resource Configurations #
     ###########################
