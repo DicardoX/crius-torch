@@ -48,7 +48,7 @@ class GlobalEnvConfigs:
     num_devices_per_node: int = 1
     """ Number of devices per node. """
 
-    per_device_memory_capacity_in_gb: float = 40.0
+    per_device_memory_capacity_in_gb: float = 10.0
     """ Memory capacity (in GB) of the target compute device. """
 
     current_device: torch.device = torch.device("cpu")

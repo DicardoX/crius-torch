@@ -229,7 +229,7 @@ class CriusParallelPlanner:
         if np.sum(
             max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
         ) > global_configs.per_device_memory_capacity_in_gb:
-            return 1e9    # OOM occurs
+            return 1e20    # OOM occurs
         
         # Traverse forward/backward graphs to estimate communication cost
         stage_comm_costs, bw_stage_comm_costs = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)], \
@@ -297,47 +297,41 @@ class CriusParallelPlanner:
         ]
         graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
 
-        # FIXME(chunyu): Fix bugs of tensor_meta missing in memory estimation.
         for node in graph.nodes:
-            print(node.target, node.layer_type, node.meta.get("tensor_meta", None))
-            print(node.meta)
-        exit(0)
+            # if "tensor_meta" not in node.meta:
+            #     continue    # Skip non-tensor node
+            # Since we deepcopy precompiled graph yet cannot deepcopy tensor_meta, we directly 
+            # use node.input_shapes/output_shapes to estimate weight shape
+            weight_shape = None
+            if node.layer_type == "gemm":
+                # Weight
+                weight_shape = [node.input_shapes[0][-1], node.output_shapes[0][-1]]
+                stage_weight_mems[node.stage_index] += float(
+                    (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
+                    parallelism_plan.tensor_parallel_degree
+                ) / (1024 ** 3)   # GB
 
-        for node in graph.nodes:
-            if "tensor_meta" not in node.meta:
-                continue    # Skip non-tensor node
-            
-            # Weight
-            tensor_meta = node.meta["tensor_meta"]
-            stage_weight_mems[node.stage_index] += (
-                (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
-                parallelism_plan.tensor_parallel_degree
-            ) / (1024 ** 3)   # GB
+                # Optimizer states
+                # Adam optimizer by default, with 2 states per weight parameter
+                stage_optim_mems[node.stage_index] += float(
+                    2 * (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
+                    parallelism_plan.tensor_parallel_degree
+                ) / (1024 ** 3)   # GB
+
+                # Gradient
+                stage_grad_mems[node.stage_index] += float(
+                    (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
+                    parallelism_plan.tensor_parallel_degree
+                ) / (1024 ** 3)   # GB
             
             # Activation
             # FIXME(chunyu): Incomplete activation memory estimation, should consider more layer types.
             if node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", ):
                 for out_shape in node.output_shapes:
-                    stage_act_mems[node.stage_index] += (
+                    stage_act_mems[node.stage_index] += float(
                         (np.prod(list(out_shape)) * dtype_to_bytes.get(parallelism_plan.comm_data_type, 4)) / 
                         parallelism_plan.tensor_parallel_degree
                     ) / (1024 ** 3)   # GB
-            
-            # Optimizer states
-            # Adam optimizer by default, with 2 states per weight parameter
-            stage_optim_mems[node.stage_index] += (
-                2 * (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
-                parallelism_plan.tensor_parallel_degree
-            ) / (1024 ** 3)   # GB
-
-            # Gradient
-            stage_grad_mems[node.stage_index] += (
-                (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
-                parallelism_plan.tensor_parallel_degree
-            ) / (1024 ** 3)   # GB
-        
-        print(stage_weight_mems, stage_act_mems, stage_optim_mems, stage_grad_mems)
-        exit(0)
 
         max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem = max(stage_weight_mems), \
             max(stage_act_mems), max(stage_optim_mems), max(stage_grad_mems)

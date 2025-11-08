@@ -49,6 +49,7 @@ class IRNode(fx.Node):
         
         self.layer_type = None
         self.input_shapes, self.output_shapes = None, None
+        self.dtype = None
         self.node_pass, self.node_parallelism = None, None
         self.layout = None
         self.latency: Optional[float] = None
@@ -150,6 +151,7 @@ class IRGraph(fx.Graph):
             new_node.output_shapes = copy.deepcopy(node.output_shapes, memo)
             new_node.node_pass = copy.deepcopy(node.node_pass, memo)
             new_node.node_parallelism = copy.deepcopy(node.node_parallelism, memo)
+            new_node.dtype = copy.deepcopy(node.dtype, memo)
             new_node.layout = copy.deepcopy(node.layout, memo)
             new_node.latency = copy.deepcopy(node.latency, memo)
             new_node.stage_index = copy.deepcopy(node.stage_index, memo)

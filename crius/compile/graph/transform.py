@@ -89,6 +89,15 @@ def propagate_node_shapes(graph: Optional[IRGraph], *input_args, **input_kwargs)
         # setattr(node, 'output_shapes', output_shapes)
         setattr(list(graph.nodes)[i], 'output_shapes', output_shapes)
 
+        # Data type
+        if hasattr(node, 'meta') and 'tensor_meta' in node.meta:
+            tensor_meta = node.meta['tensor_meta'] \
+                if isinstance(node.meta['tensor_meta'], TensorMetadata) else node.meta['tensor_meta'][0]
+            dtype = tensor_meta.dtype
+        else:
+            dtype = None
+        setattr(list(graph.nodes)[i], 'dtype', dtype)
+
     return graph
 
 
