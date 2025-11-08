@@ -275,8 +275,6 @@ class CriusParallelPlanner:
                 bw_stage_comm_costs[node.stage_index] += comm_volume_in_bytes
             else:
                 raise ValueError(f"Invalid node pass type: {node.node_pass}")
-        
-        print(stage_comm_costs, bw_stage_comm_costs)
 
         # FIXME(chunyu): Use the "communication load" metric proposed in the paper
         total_comm_cost =  np.sum(stage_comm_costs) + np.sum(bw_stage_comm_costs)
@@ -291,19 +289,55 @@ class CriusParallelPlanner:
         Args:
             parallelism_plan: The parallelism plan for the model to be profiled with.
         """
-        
+        assert not parallelism_plan.use_gradient_checkpointing, \
+            f"Memory estimation with gradient checkpointing is not supported yet."
+
         stage_weight_mems, stage_act_mems, stage_optim_mems, stage_grad_mems = [
             [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)] for _ in range(4)
         ]
         graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
+
+        # FIXME(chunyu): Fix bugs of tensor_meta missing in memory estimation.
+        for node in graph.nodes:
+            print(node.target, node.layer_type, node.meta.get("tensor_meta", None))
+            print(node.meta)
+        exit(0)
+
         for node in graph.nodes:
             if "tensor_meta" not in node.meta:
                 continue    # Skip non-tensor node
+            
+            # Weight
             tensor_meta = node.meta["tensor_meta"]
             stage_weight_mems[node.stage_index] += (
                 (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
                 parallelism_plan.tensor_parallel_degree
             ) / (1024 ** 3)   # GB
+            
+            # Activation
+            # FIXME(chunyu): Incomplete activation memory estimation, should consider more layer types.
+            if node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", ):
+                for out_shape in node.output_shapes:
+                    stage_act_mems[node.stage_index] += (
+                        (np.prod(list(out_shape)) * dtype_to_bytes.get(parallelism_plan.comm_data_type, 4)) / 
+                        parallelism_plan.tensor_parallel_degree
+                    ) / (1024 ** 3)   # GB
+            
+            # Optimizer states
+            # Adam optimizer by default, with 2 states per weight parameter
+            stage_optim_mems[node.stage_index] += (
+                2 * (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
+                parallelism_plan.tensor_parallel_degree
+            ) / (1024 ** 3)   # GB
+
+            # Gradient
+            stage_grad_mems[node.stage_index] += (
+                (tensor_meta.shape.numel() * dtype_to_bytes.get(tensor_meta.dtype, 4)) / 
+                parallelism_plan.tensor_parallel_degree
+            ) / (1024 ** 3)   # GB
+        
+        print(stage_weight_mems, stage_act_mems, stage_optim_mems, stage_grad_mems)
+        exit(0)
 
         max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem = max(stage_weight_mems), \
             max(stage_act_mems), max(stage_optim_mems), max(stage_grad_mems)

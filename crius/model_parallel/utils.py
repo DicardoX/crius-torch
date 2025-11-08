@@ -66,10 +66,15 @@ class ParallelismPlan:
     """ (Deprecated) Mapping from layer index to stage index. 
     `[[0, 1], [2, 3]]` means layer 0/1 are in stage 0 and layer 2/3 are in stage 1. """
 
+    ########################
+    # Optimization Options #
+    ########################
+    use_gradient_checkpointing: bool = False
+    """ Whether to enable gradient checkpointing (i.e., recomputation) for memory reduction. """
+
     ##############################
     # Runtime Computation Graphs #
     ##############################
-
     graph: Optional["IRGraph"] = None
     """ Forward IR graph after compilation and pipeline partitioning. """
 

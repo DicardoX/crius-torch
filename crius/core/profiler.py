@@ -155,7 +155,7 @@ class CriusDistProfiler:
                                 if right_op_hidden_dim_indices is not None else None
                         
                         else:
-                            raise ValueError(f"Unsupported node layer type: {node.layer_type}")
+                            logger.warning(f"Ignored node type {node.layer_type} in latency query.")
                         
                         query_key = CriusOfflineDataManager.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
