@@ -48,9 +48,9 @@ class ParallelTuneTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
+        global_bs = 16
         seq_len = 2048
-        num_micro_batches = 2
+        num_micro_batches = 4
         hidden_size = 4096
         num_layers = 4
         data_dtype = torch.long
@@ -80,7 +80,6 @@ class ParallelTuneTest(unittest.TestCase):
         pipeline_boundary_end_marker = ['dropout', 'add', ]
         proto_parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
-            pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
             num_layers=num_layers,
             num_microbatches=num_micro_batches,
             pipeline_stage_partition_method=pipeline_stage_partition_method,

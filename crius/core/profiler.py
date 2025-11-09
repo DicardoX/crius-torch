@@ -105,11 +105,11 @@ class CriusDistProfiler:
                              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
         # Step 2. Compute per-stage latency
-        stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
+        stage_latencies, grad_sync_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
 
         # Step 3. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
-            stage_latencies, parallelism_plan, only_forward,
+            stage_latencies, grad_sync_latencies, parallelism_plan, only_forward,
         )
         return e2e_latency
 
@@ -200,10 +200,16 @@ class CriusDistProfiler:
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")
 
-    def _compute_stage_latencies(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph]) -> List[List[float]]:
+    def _compute_stage_latencies(
+        self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph],
+    ) -> Tuple[List[List[float]], List[float]]:
         """ Compute per-stage latencies. """
 
+        # FIXME(chunyu): In fact, the gradient sync of DP is conduncted at last per-batch instead of per-microbatch. We should seperate this
+        # rather than accounting it in the latency of backward stages.
+
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
+        grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for i, node in enumerate(list(graph.nodes)):
             # Accumulate latency
             assert node.stage_index is not None, "Forward node stage index is not set."
@@ -222,25 +228,35 @@ class CriusDistProfiler:
             assert bw_graph is not None
             for node in bw_graph.nodes:
                 assert node.stage_index is not None, "Backward node stage index is not set."
-                if node.latency is not None and node.stage_index is not None:
+                if node.latency is None or node.stage_index is None:
+                    continue
+
+                if (node.node_pass == "backward" and node.node_parallelism == "dp" and node.layer_type == "all_reduce"):
+                    # The gradient sync of DP is conduncted at last per-batch instead of per-microbatch. We should seperate this
+                    # rather than accounting it in the latency of backward stages.
+                    grad_sync_latencies[node.stage_index] += node.latency
+                else:
+                    # Normal backward nodes
                     stage_latencies[node.stage_index][1] += node.latency
 
-        return stage_latencies
+        return stage_latencies, grad_sync_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
-        self, stage_latencies: List[List[float]], parallelism_plan: ParallelismPlan, only_forward: bool = False,
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], 
+        parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
         
         if parallelism_plan.pipeline_type == "1f1b":
             return self._model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-                stage_latencies, parallelism_plan, only_forward,
+                stage_latencies, grad_sync_latencies, parallelism_plan, only_forward,
             )
         else:
             raise ValueError(f"Pipeline type {parallelism_plan.pipeline_type} is not supported yet.")
     
     def _model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-        self, stage_latencies: List[float], parallelism_plan: ParallelismPlan, only_forward: bool = False,
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], 
+        parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
 
@@ -274,6 +290,7 @@ class CriusDistProfiler:
         t_steady = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1])
 
         # Phase 3. Drain
-        t_drain = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)])
+        # NOTE: Approximation: grad sync overhead remains nearly similar across stages
+        t_drain = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)]) + np.max(grad_sync_latencies)
 
         return (t_warmup + t_steady + t_drain)

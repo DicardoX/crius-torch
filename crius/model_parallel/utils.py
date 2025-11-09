@@ -39,6 +39,12 @@ class ParallelismPlan:
     data_parallel_degree: int = 1
     """ Degree of data parallelism. """
 
+    use_pytorch_ddp_data_partitioning: bool = True
+    """ Use PyTorch's DDP style batch data partitioning, i.e., each DP replica executes a full microbatch, 
+    respectively, instead of internally sharding the same microbatch into #DP-degree partitions. For example,
+    assuming 16 microbatches and DP=2, each DP replica executes 8 microbatches and the total number of microbatches
+    for the per-DP pipeline becomes 8. """
+
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
     Detailed in `class CriusParallelPlanner`."""
@@ -80,3 +86,11 @@ class ParallelismPlan:
 
     bw_graph: Optional["IRGraph"] = None
     """ Backward IR graph after compilation and pipeline partitioning. """
+
+    def __post_init__(self):
+        if self.use_pytorch_ddp_data_partitioning:
+            # Each DP replica executes a full microbatch
+            assert self.num_microbatches % self.data_parallel_degree == 0, \
+                f"Number of microbatches ({self.num_microbatches}) must be divisible by " + \
+                f"DP degree ({self.data_parallel_degree})."        
+            self.num_microbatches = self.num_microbatches // self.data_parallel_degree
