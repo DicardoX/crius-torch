@@ -75,16 +75,22 @@ def test_basic_import():
 
 
 def test_gpt_model_integration():
-    """测试2：GPT模型集成测试"""
-    print("\n=== 测试2：GPT模型集成 ===")
+    """测试2：GPT模型和调度器集成测试"""
+    print("\n=== 测试2：GPT模型和调度器集成 ===")
     try:
         from crius.train_backend.megatron.gpt_model import GPTModel
+        from crius.train_backend.megatron.pipeline_parallel import schedules
         from megatron.core.transformer.transformer_config import TransformerConfig
         
-        # 检查方法是否存在
-        assert hasattr(GPTModel, 'pipeline_forward_backward')
-        assert hasattr(GPTModel, 'get_forward_backward_func')
-        print("✓ GPT模型包含流水线并行方法")
+        # 检查模型基本方法
+        assert hasattr(GPTModel, 'forward')
+        assert hasattr(GPTModel, 'set_input_tensor')
+        print("✓ GPT模型包含必要的基本方法")
+        
+        # 检查调度器函数
+        assert hasattr(schedules, 'get_forward_backward_func')
+        assert hasattr(schedules, 'forward_step')
+        print("✓ 调度器模块包含必要的调度函数")
         
         return True
     except Exception as e:
@@ -138,10 +144,15 @@ def test_single_gpu_training():
         # 创建优化器
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
         
-        # 运行一次前向后向
+        # 运行一次前向后向（使用 Megatron 官方方式）
         print("运行前向后向传播...")
-        losses = model.pipeline_forward_backward(
+        from crius.train_backend.megatron.pipeline_parallel import schedules
+        
+        forward_backward_func = schedules.get_forward_backward_func()
+        losses = forward_backward_func(
+            forward_step_func=schedules.forward_step,
             data_iterator=data_iterator,
+            model=model,
             optimizer=optimizer,
             num_microbatches=2,
             forward_only=False
@@ -232,10 +243,15 @@ def test_pipeline_parallel_training():
         # 创建优化器
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
         
-        # 运行流水线并行训练
+        # 运行流水线并行训练（使用 Megatron 官方方式）
         print(f"[Rank {rank}] 开始流水线并行训练...")
-        losses = model.pipeline_forward_backward(
+        from crius.train_backend.megatron.pipeline_parallel import schedules
+        
+        forward_backward_func = schedules.get_forward_backward_func()
+        losses = forward_backward_func(
+            forward_step_func=schedules.forward_step,
             data_iterator=data_iterator,
+            model=model,
             optimizer=optimizer,
             num_microbatches=4,
             forward_only=False
