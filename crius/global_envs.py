@@ -39,7 +39,7 @@ class GlobalEnvConfigs:
     #####################
     # Model Parallelism #
     #####################
-    num_nodes: int = 2
+    num_nodes: int = 1
     """ Number of nodes. """
 
     tensor_model_parallel_size: int = 1

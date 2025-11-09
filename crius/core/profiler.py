@@ -21,6 +21,8 @@ from crius.compile.graph import IRGraph, IRNode
 from crius.offline.offline_recorder import OfflineDataRecorder
 from crius.global_envs import logger, global_configs
 
+import torch.distributed as dist
+save_node_info = True
 
 class CriusDistProfiler:
     """ Crius Torch-like disaggregated profiler. 
@@ -82,7 +84,12 @@ class CriusDistProfiler:
 
         # Step 2. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
+        
+        # print(f'graph: {graph}')
+        # print(f'bw_graph: {bw_graph}')
+
         # logger.debug("\n\n============> Forward graph")
+
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
             if node.layer_type in (
@@ -92,19 +99,33 @@ class CriusDistProfiler:
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
                 suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
-            # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-            #              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
-            #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-            #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+            if dist.get_rank() == 0 and save_node_info == True:
+                with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
+                    f.write(f"{prefix_str_}Node target: {node.target} | " + 
+                            f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                            f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                            f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+
+                # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
+                #             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                #             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                #             f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
         if bw_graph is not None:
-            # logger.debug("\n\n============> Backward graph")
+            logger.debug("\n\n============> Backward graph")
             prefix_str_, suffix_str_ = "", ""
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
-                # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
-                #              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
-                #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
-                #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+                if dist.get_rank() == 0 and save_node_info == True:
+                    with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
+                        f.write(f"{prefix_str_}Node target: {node.target} | " + 
+                                f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                                f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                                f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+
+                    # logger.debug(f"{prefix_str_}Node target: {node.target} | " + 
+                    #              f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
+                    #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
+                    #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
         # Step 3. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
@@ -154,6 +175,9 @@ class CriusDistProfiler:
             """ Estimate the time of the communication operator based on offline profiling results. """
             # Querying key
             key = f'{op_type}_n{num_node}_gs{group_size}'
+            if key not in comm_time_table:
+                logger.warning(f"Query key [ {key} ] not found in profiled data, using default latency 0 ms.")
+                return 0
 
             # Estimate comm time
             last_comm_size, last_comm_time = -1, -1
@@ -164,6 +188,8 @@ class CriusDistProfiler:
             #     # Resize comm_size based on dtype
             #     comm_size *= DTYPE_TO_F32_RATIO_TABLE[dtype]
             #     dtype = "float32"
+
+            # print(comm_time_table)
 
             if comm_size <= comm_time_table[key][0][0]:
                 return comm_time_table[key][0][1]
@@ -202,6 +228,8 @@ class CriusDistProfiler:
         
         def __query_one_graph(graph_): 
             for node in graph_.nodes:
+                # if dist.get_rank() == 0:
+                #     print(node.node_parallelism)
                 if (
                     str(node.op) in ("call_module", "call_function", "call_method") and
                     "unknown" not in node.layer_type
