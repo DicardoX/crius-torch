@@ -195,10 +195,12 @@ def insert_comm_primitives_into_graph(
     ):
         return graph    # No insertion needed
     
-    return _insert_comm_primitives_into_graph_impl(graph, forward_pass)
+    return _insert_comm_primitives_into_graph_impl(graph, parallelism_plan, forward_pass)
 
 
-def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) -> IRGraph:
+def _insert_comm_primitives_into_graph_impl(
+    graph: IRGraph, parallelism_plan: ParallelismPlan, forward_pass: bool,
+) -> IRGraph:
     """ Case-specific implementation for communication primitive insertion. 
     
     NOTE: Engineers should customize the `global_configs.comm_op_insert_rules`.
@@ -221,9 +223,17 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
         skip_first_n = comm_op_insert_rules[comm_primitive_str].get("skip_first_n", 0)
         interval = comm_op_insert_rules[comm_primitive_str].get("interval", 1)
         node_pass = comm_op_insert_rules[comm_primitive_str].get("pass", "forward")
-        node_parallelism = comm_op_insert_rules[comm_primitive_str].get("parallelism", "tp")
+        node_parallelism = comm_op_insert_rules[comm_primitive_str].get("parallelism", None)
+        
+        n_ranks = 1
+        if node_parallelism == "tp":
+            n_ranks = parallelism_plan.tensor_parallel_degree
+        elif node_parallelism == "dp":
+            n_ranks = parallelism_plan.data_parallel_degree
+        else:
+            raise ValueError(f"Unsupported node parallelism: {node_parallelism}")
+        
         after_node_num = 0
-
         if forward_pass:
             # Forward pass
             cur_marker = None
@@ -236,13 +246,15 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                         continue    # Node target not matched
 
                     after_node_num += 1
-                    if after_node_num <= skip_first_n:
-                        continue    # Skip the first n matched nodes
-
-                    if after_node_num % interval != 0:
-                        continue    # We insert every `interval` matched nodes
-
-                    if node_pass != "forward":
+                    if (
+                        # Skip the first n matched nodes
+                        after_node_num <= skip_first_n or
+                        # We insert every `interval` matched nodes
+                        (after_node_num - skip_first_n - 1) % interval != 0 or
+                        node_pass != "forward" or
+                        # No parallelism
+                        n_ranks <= 1
+                    ):
                         continue
 
                     if all([_marker not in cur_marker for _marker in after_markers]):
@@ -273,10 +285,15 @@ def _insert_comm_primitives_into_graph_impl(graph: IRGraph, forward_pass: bool) 
                         continue
 
                     after_node_num += 1
-                    if after_node_num % interval != 0:
-                        continue
-
-                    if node_pass != "backward":
+                    if (
+                        # Skip the first n matched nodes
+                        after_node_num <= skip_first_n or
+                        # We insert every `interval` matched nodes
+                        (after_node_num - skip_first_n - 1) % interval != 0 or
+                        node_pass != "backward" or
+                        # No parallelism
+                        n_ranks <= 1
+                    ):
                         continue
                     
                     # assert comm_primitive not in str(node.next.target), \

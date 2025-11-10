@@ -60,7 +60,7 @@ class ParallelTuneTest(unittest.TestCase):
         vocab_size = 50000
         
         global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 4
+        global_configs.num_devices_per_node = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
