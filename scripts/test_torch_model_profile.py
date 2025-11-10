@@ -642,8 +642,8 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
 
@@ -687,6 +687,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # We manually set the communication op insertion rules
         global_configs.comm_op_insert_rules = {
+<<<<<<< HEAD
             "all_reduce:tp": {
                 # "after_nodes": ['fc2', ],
                 # "after_nodes": ['matmul', ],
@@ -703,6 +704,24 @@ class TorchModelProfileTest(unittest.TestCase):
                 "pass": 'backward',
                 "parallelism": 'dp',
             },
+=======
+            # "all_reduce:tp": {
+            #     # "after_nodes": ['fc2', ],
+            #     # "after_nodes": ['matmul', ],
+            #     "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
+            #     "after_nodes": ['contiguous', ],
+            #     "interval": 1,
+            #     "pass": 'forward',
+            #     "parallelism": 'tp',
+            # },
+            # "all_reduce:dp": {
+            #     "after_markers": [],
+            #     "after_nodes": ['weight_grad_reduce_sum', ],
+            #     "interval": 1,
+            #     "pass": 'backward',
+            #     "parallelism": 'dp',
+            # },
+>>>>>>> dev-yixiao-0.1
         }
 
         # Init distributed
@@ -776,10 +795,10 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         e2e_latency = profiler.profile(
             model=model,
-            base_input_args=input_args,
-            base_input_kwargs=input_kwargs,
             parallelism_plan=parallelism_plan,
             only_forward=global_configs.only_forward,
+            base_input_args=input_args,
+            base_input_kwargs=input_kwargs,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")

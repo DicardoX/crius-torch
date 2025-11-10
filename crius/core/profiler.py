@@ -27,7 +27,7 @@ save_node_info = True
 class CriusDistProfiler:
     """ Crius Torch-like disaggregated profiler. 
     
-    This module provides (1) operator disaggregation and (2) Device-free model profiling.
+    Roadmap of this module: (1) Operator disaggregation, and (2) Device-free model profiling.
     """
 
     def __init__(
@@ -56,33 +56,40 @@ class CriusDistProfiler:
 
     def profile(
         self, model: nn.Module, 
-        base_input_args: Tuple[Any],
-        base_input_kwargs: Dict[str, Any],
         parallelism_plan: ParallelismPlan,
         only_forward: bool = False,
+        base_input_args: Tuple[Any] = None,
+        base_input_kwargs: Dict[str, Any] = None,
+        graph: IRGraph = None,
+        bw_graph: IRGraph = None,
     ) -> Optional[float]:
         """ Profile the model. 
         
         Args:
             model: Torch-like model to be profiled.
-            base_input_args: Input arguments of model `.forward()` for IR graph transformation.
-            base_input_kwargs: Input keyword arguments of model `.forward()` for IR graph transformation.
             parallelism_plan: Parallelism plan of the model.
             only_forward: If True, only profile the forward pass. Default is False.
-        
+            base_input_args: (Optional) Input arguments of model `.forward()` for IR graph transformation.
+            base_input_kwargs: (Optional) Input keyword arguments of model `.forward()` for IR graph transformation.
+            graph: (Optional) Pre-generated forward IR graph.
+            bw_graph: (Optional) Pre-generated backward IR graph.
+
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
         """
 
-        # Step 1. Compile the model into IR graph
-        compile_configs = CompileConfigs(
-            base_input_args=base_input_args,
-            base_input_kwargs=base_input_kwargs,
-            parallelism_plan=parallelism_plan,
-        )
-        graph, bw_graph = compile(model, compile_configs)
+        # Step 0. (Optional) Compile the model into IR graph
+        if graph is None:
+            assert base_input_args is not None and base_input_kwargs is not None, \
+                f"When no pre-generated IR graphs, must provide base inputs for compilation in profiler."
+            compile_configs = CompileConfigs(
+                base_input_args=base_input_args,
+                base_input_kwargs=base_input_kwargs,
+                parallelism_plan=parallelism_plan,
+            )
+            graph, bw_graph = compile(model, compile_configs)
 
-        # Step 2. Query and record per-operator latencies
+        # Step 1. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)
         
         # print(f'graph: {graph}')
@@ -99,6 +106,7 @@ class CriusDistProfiler:
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
                 suffix_str_ = "\033[0m"
             latency = getattr(node, "latency", None)
+
             if dist.get_rank() == 0 and save_node_info == True:
                 with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
                     f.write(f"{prefix_str_}Node target: {node.target} | " + 
@@ -110,11 +118,13 @@ class CriusDistProfiler:
                 #             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                 #             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                 #             f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
+
         if bw_graph is not None:
             logger.debug("\n\n============> Backward graph")
             prefix_str_, suffix_str_ = "", ""
             for node in bw_graph.nodes:
                 latency = getattr(node, "latency", None)
+
                 if dist.get_rank() == 0 and save_node_info == True:
                     with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
                         f.write(f"{prefix_str_}Node target: {node.target} | " + 
@@ -127,10 +137,10 @@ class CriusDistProfiler:
                     #              f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
                     #              f"Latency: {latency} | Layout: {node.layout}{suffix_str_}\n")
 
-        # Step 3. Compute per-stage latency
+        # Step 2. Compute per-stage latency
         stage_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
 
-        # Step 4. Model end-to-end pipeline latency
+        # Step 3. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
             stage_latencies, parallelism_plan, only_forward,
         )
@@ -207,7 +217,7 @@ class CriusDistProfiler:
             max_profiled_comm_size = comm_time_table[key][-1][0]
             # Decompose communication size into profiled scope
             max_profiled_cnt = comm_size // max_profiled_comm_size
-            rest_comm_time = _estimate_comm_op_time(op_type, num_node, group_size, (comm_size % max_profiled_comm_size,), comm_time_table)
+            rest_comm_time = _estimate_comm_op_time(op_type, num_node, group_size, comm_size % max_profiled_comm_size, comm_time_table)
             max_comm_time = comm_time_table[key][-1][1]
 
             # if True:
@@ -370,16 +380,16 @@ class CriusDistProfiler:
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
 
+        An example with 2 stages (2 fw + 2 bw) and 2 microbatches:
+
                    Warmup |         Steady          | Drain
         clock num    0    |   1     2     3     4   |   5
         ---------  -----  | ----- ----- ----- ----- | -----
-         stage 0   (0,0)  | (0,1)       (0,2)       | (0,3)
-         stage 1          | (1,0) (1,2) (1,1) (1,3) |
+         stage 0   (0,0)  | (0,1)       (0,-1)       | (0,-2)
+         stage 1          | (1,0) (1,-1) (1,1) (1,-2) |
 
-        where `(i,j)` denotes stage `i` executes micro-batch `j` when `j < #micro-batches`,
-        and denotes stage `i` executes micro-batch `j - #micro-batches` when `j >= #micro-batches`.
-
-        Note that the backward pass's latency is 2x of the forward pass.
+        where `(i,j)` denotes stage `i` executes forward micro-batch `j` when `j >= 0`,
+        and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
         
         num_microbatches = parallelism_plan.num_microbatches

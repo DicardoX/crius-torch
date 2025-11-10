@@ -23,7 +23,7 @@ class ParallelismPlan:
     """ Degree of pipeline parallelism. """
 
     num_layers: int = 1
-    """ Number of layers in the model. """
+    """ Number of transformer layers in the LLM model. """
 
     num_microbatches: int = 1
     """ Number of microbatches in pipeline parallelism. """
@@ -35,7 +35,8 @@ class ParallelismPlan:
     """ Degree of data parallelism. """
 
     pipeline_stage_partition_method: str = "uniform"
-    """ How to partition operators into stages. Options: ['uniform', 'manual', ] """
+    """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
+    Detailed in `class CriusParallelPlanner`."""
 
     pipeline_use_boundary_markers: bool = False
     """ Whether to use boundary markers to indicate the start and end of a layer in the IR graph. """
