@@ -112,7 +112,7 @@ def compile(
     # Step 4. Construct backward graph
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, compile_configs.parallelism_plan, forward_pass=False)
-    # # Step 5. Pipeline stage partition
+    # Step 5. Pipeline stage partition
     # partition_pipeline_stages(graph, compile_configs.parallelism_plan, bw_graph)
 
     return graph, bw_graph

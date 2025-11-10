@@ -51,6 +51,7 @@ class CriusDistProfiler:
         base_input_kwargs: Dict[str, Any] = None,
         graph: IRGraph = None,
         bw_graph: IRGraph = None,
+        partition_pipeline_stages_func: Callable = None,
     ) -> Optional[float]:
         """ Profile the model. 
         
@@ -77,6 +78,9 @@ class CriusDistProfiler:
                 parallelism_plan=parallelism_plan,
             )
             graph, bw_graph = compile(model, compile_configs)
+        
+        if partition_pipeline_stages_func is not None:
+            partition_pipeline_stages_func(graph, parallelism_plan, bw_graph)
 
         # Step 1. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)

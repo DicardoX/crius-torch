@@ -16,6 +16,7 @@ from torch import nn
 
 from crius.loader import (ModelLoader, ShadowModelLoader)
 from crius.core.profiler import CriusDistProfiler
+from crius.core.grid_planner.planner import CriusParallelPlanner
 from crius.model_parallel.utils import ParallelismPlan
 from crius.global_envs import global_configs
 
@@ -69,7 +70,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -222,7 +223,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
             prof.export_chrome_trace('/app/torch_exec_trace.json')
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 
@@ -329,7 +330,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -467,6 +468,7 @@ class TorchModelProfileTest(unittest.TestCase):
             only_forward=global_configs.only_forward,
             base_input_args=input_args,
             base_input_kwargs=input_kwargs,
+            partition_pipeline_stages_func=CriusParallelPlanner.partition_pipeline_stages,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")

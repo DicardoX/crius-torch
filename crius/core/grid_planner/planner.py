@@ -66,7 +66,7 @@ class CriusParallelPlanner:
                 raise ValueError(f"Invalid pipeline stage partition method: {self.pipeline_stage_partition_method}")
 
             # Determine pipeline stage boundary
-            self._partition_pipeline_stages(graph, plan, bw_graph)
+            self.__class__.partition_pipeline_stages(graph, plan, bw_graph)
             plan.graph = graph
             plan.bw_graph = bw_graph
 
@@ -122,8 +122,9 @@ class CriusParallelPlanner:
         """ TODO(chunyu): Which granularity should we use to assign? Operator or transformer layer? """
         raise NotImplementedError
     
-    def _partition_pipeline_stages(
-        self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph] = None,
+    @classmethod
+    def partition_pipeline_stages(
+        cls, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph] = None,
     ) -> None:
         """ Annotate all nodes' pipeline stage index. """
 
