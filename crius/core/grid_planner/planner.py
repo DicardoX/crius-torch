@@ -84,13 +84,13 @@ class CriusParallelPlanner:
         """ Enumerate plans (`ParallelismPlan`). """
         
         num_nodes, num_devices_per_node, pp = grid.num_nodes, grid.num_devices_per_node, grid.pipeline_degree
-        num_gpus = num_nodes * num_devices_per_node
+        num_gpus_tp_dp = num_nodes * num_devices_per_node // pp
         plans = []
         
         tp = 1
-        while tp <= num_gpus:
-            assert num_gpus % tp == 0
-            dp = num_gpus // tp
+        while tp <= num_gpus_tp_dp:
+            assert num_gpus_tp_dp % tp == 0
+            dp = num_gpus_tp_dp //  tp
             plans.append(
                 ParallelismPlan(
                     self._proto_plan.pipeline_type,
