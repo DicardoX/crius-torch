@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 from crius.core.grid_planner.grid import Grid
+from crius.core.utils import estimate_model_memory_access_gb
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (postcompile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
@@ -226,7 +227,7 @@ class CriusParallelPlanner:
             return parallelism_plan.data_parallel_degree * 1024 + parallelism_plan.tensor_parallel_degree
 
         (max_stage_weight_mem, max_stage_act_mem, 
-         max_stage_optim_mem, max_stage_grad_mem) = self._estimate_model_memory_access_gb(parallelism_plan)
+         max_stage_optim_mem, max_stage_grad_mem) = estimate_model_memory_access_gb(parallelism_plan)
         if np.sum(
             max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
         ) > global_configs.per_device_memory_capacity_in_gb:
@@ -280,60 +281,3 @@ class CriusParallelPlanner:
         # FIXME(chunyu): Use the "communication load" metric proposed in the paper
         total_comm_cost =  np.sum(stage_comm_costs) + np.sum(bw_stage_comm_costs)
         return total_comm_cost
-    
-    def _estimate_model_memory_access_gb(
-        self, 
-        parallelism_plan: ParallelismPlan,
-    ) -> List[float]:
-        """ Estimate memory access of the model, including weight, activation, optimizer, and gradient. 
-        
-        Args:
-            parallelism_plan: The parallelism plan for the model to be profiled with.
-        """
-        assert not parallelism_plan.use_gradient_checkpointing, \
-            f"Memory estimation with gradient checkpointing is not supported yet."
-
-        stage_weight_mems, stage_act_mems, stage_optim_mems, stage_grad_mems = [
-            [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)] for _ in range(4)
-        ]
-        graph, bw_graph = parallelism_plan.graph, parallelism_plan.bw_graph
-
-        for node in graph.nodes:
-            # if "tensor_meta" not in node.meta:
-            #     continue    # Skip non-tensor node
-            # Since we deepcopy precompiled graph yet cannot deepcopy tensor_meta, we directly 
-            # use node.input_shapes/output_shapes to estimate weight shape
-            weight_shape = None
-            if node.layer_type == "gemm":
-                # Weight
-                weight_shape = [node.input_shapes[0][-1], node.output_shapes[0][-1]]
-                stage_weight_mems[node.stage_index] += float(
-                    (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
-                    parallelism_plan.tensor_parallel_degree
-                ) / (1024 ** 3)   # GB
-
-                # Optimizer states
-                # Adam optimizer by default, with 2 states per weight parameter
-                stage_optim_mems[node.stage_index] += float(
-                    2 * (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
-                    parallelism_plan.tensor_parallel_degree
-                ) / (1024 ** 3)   # GB
-
-                # Gradient
-                stage_grad_mems[node.stage_index] += float(
-                    (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4)) / 
-                    parallelism_plan.tensor_parallel_degree
-                ) / (1024 ** 3)   # GB
-            
-            # Activation
-            # FIXME(chunyu): Incomplete activation memory estimation, should consider more layer types.
-            if node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", ):
-                for out_shape in node.output_shapes:
-                    stage_act_mems[node.stage_index] += float(
-                        (np.prod(list(out_shape)) * dtype_to_bytes.get(parallelism_plan.comm_data_type, 4)) / 
-                        parallelism_plan.tensor_parallel_degree
-                    ) / (1024 ** 3)   # GB
-
-        max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem = max(stage_weight_mems), \
-            max(stage_act_mems), max(stage_optim_mems), max(stage_grad_mems)
-        return max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem

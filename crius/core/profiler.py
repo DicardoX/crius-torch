@@ -14,6 +14,7 @@ import pickle
 import torch
 from torch import nn
 
+from crius.core.utils import estimate_model_memory_access_gb
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
@@ -52,6 +53,7 @@ class CriusDistProfiler:
         graph: IRGraph = None,
         bw_graph: IRGraph = None,
         partition_pipeline_stages_func: Callable = None,
+        check_oom: bool = True,
     ) -> Optional[float]:
         """ Profile the model. 
         
@@ -63,6 +65,7 @@ class CriusDistProfiler:
             base_input_kwargs: (Optional) Input keyword arguments of model `.forward()` for IR graph transformation.
             graph: (Optional) Pre-generated forward IR graph.
             bw_graph: (Optional) Pre-generated backward IR graph.
+            check_oom: (Optional): If true, check out-of-memory after stage partition.
 
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
@@ -81,6 +84,22 @@ class CriusDistProfiler:
         
         if partition_pipeline_stages_func is not None:
             partition_pipeline_stages_func(graph, parallelism_plan, bw_graph)
+
+        # Step 0. (Optional) Check OOM
+        if check_oom:
+            (max_stage_weight_mem, max_stage_act_mem, 
+            max_stage_optim_mem, max_stage_grad_mem) = estimate_model_memory_access_gb(parallelism_plan, graph, bw_graph)
+            
+            print(max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem)
+            print(np.sum(
+                max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
+            ))
+            exit(0)
+            
+            if np.sum(
+                max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
+            ) > global_configs.per_device_memory_capacity_in_gb:
+                return -1.0    # OOM occurs
 
         # Step 1. Query and record per-operator latencies
         graph, bw_graph = self._query_operator_latencies_ms(graph, parallelism_plan, bw_graph)

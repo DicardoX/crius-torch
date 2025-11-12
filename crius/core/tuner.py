@@ -83,7 +83,7 @@ class CriusParallelTuner:
                 for plan in grid.pareto_optimal_plans:
                     this_e2e_latency = self.profiler.profile(
                         model=self.model, parallelism_plan=plan, only_forward=global_configs.only_forward,
-                        graph=plan.graph, bw_graph=plan.bw_graph,
+                        graph=plan.graph, bw_graph=plan.bw_graph, check_oom=False,  # Already check in planner
                     )
                     if this_e2e_latency < least_e2e_latency:
                         optimal_plan = plan
