@@ -537,83 +537,12 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.transformer_layer import TransformerLayer
         from crius.train_backend.megatron.gpt_model import GPTModel
 
-        class MegatronToyLayer(MegatronModule):
-            # TODO(chunyu): Replace nn.Linear with Megatron's tensor parallelized linear layer.
-            
-            def __init__(self, hidden_size: int, device: str, dtype: str = torch.float16) -> None:
-                super().__init__(config=None)
-                self.fc1 = nn.Linear(hidden_size, hidden_size, device=device, dtype=dtype)
-                self.fc2 = nn.Linear(hidden_size, hidden_size, device=device, dtype=dtype)
-            
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                x = self.fc1(x)
-                x = self.fc2(x)
-                torch.distributed.all_reduce(x, group=mpu.get_tensor_model_parallel_group())
-                return x
-        
-        class ToyLayerTP(nn.Module):
-            """Tensor parallel version of ToyLayer using Megatron's ColumnParallelLinear and RowParallelLinear."""
-            
-            def __init__(
-                self, hidden_size: int, config: TransformerConfig, device: str, dtype: str = torch.float16,
-            ) -> None:
-                super().__init__()
-                self.dtype = dtype
-                # Column parallel: split along output dimension
-                self.fc1 = ColumnParallelLinear(
-                    input_size=hidden_size,
-                    output_size=hidden_size,
-                    tp_size=config.tensor_model_parallel_size,
-                    bias=False,
-                    device=device,
-                    dtype=dtype,
-                )
-                # Row parallel: split along input dimension, gather output
-                self.fc2 = RowParallelLinear(
-                    input_size=hidden_size,
-                    output_size=hidden_size,
-                    tp_size=config.tensor_model_parallel_size,
-                    bias=False,
-                    device=device,
-                    dtype=dtype,
-                )
-                
-                # Ensure weights are in the correct dtype and device
-                self.fc1.weight.data = self.fc1.weight.data.to(dtype=dtype, device=device)
-                self.fc2.weight.data = self.fc2.weight.data.to(dtype=dtype, device=device)
-            
-            def forward(self, x: torch.Tensor) -> torch.Tensor:
-                x, _ = self.fc1(x)
-                x, _ = self.fc2(x)
-                return x
-
-        class MegatronToyModel(MegatronModule):
-            """ Toy Megatron model. """
-
-            def __init__(self, hidden_size: int, num_layers: int, device: str, dtype: str = torch.float16, megatron_config: Any = None) -> None:
-                super().__init__(config=megatron_config)
-                self.device = device
-                self.num_layers = num_layers
-                # self.layers = nn.ModuleList([MegatronToyLayer(hidden_size, device, dtype) for _ in range(num_layers)])
-                self.layers = nn.ModuleList([ToyLayerTP(hidden_size, megatron_config, device, dtype) for _ in range(num_layers)])
-                self.layer_norm = nn.LayerNorm(hidden_size, device=device, dtype=dtype)
-
-            def forward(self, input_: torch.Tensor) -> torch.Tensor:
-                hidden_states = input_
-                for i in range(self.num_layers):
-                    hidden_states = self.layers[i](hidden_states)
-                return self.layer_norm(hidden_states)
-        
         def model_provider(
             hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
             megatron_config: Any = None, use_toy: bool = False,
         ) -> nn.Module:
             """ Model provider function. """
-            if use_toy:
-                return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
-            else:
-                return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
-
+            return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         global_bs = 8
         seq_len = 2048
@@ -625,8 +554,8 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -641,7 +570,6 @@ class TorchModelProfileTest(unittest.TestCase):
             global_configs.use_shadow_model_loader = True
 
         # Parallelism plan
-        op_to_layer_mapping, layer_to_stage_mapping = None, None
         pipeline_stage_partition_method = "uniform"
         pipeline_use_boundary_markers = True
         pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
@@ -658,8 +586,6 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,
-            op_to_layer_mapping=op_to_layer_mapping,
-            layer_to_stage_mapping=layer_to_stage_mapping,
         )
 
         # We manually set the communication op insertion rules
@@ -691,7 +617,11 @@ class TorchModelProfileTest(unittest.TestCase):
         }
 
         # Init distributed
-        initialize_virtual_distributed(init_cpu_process_group=True)
+        initialize_virtual_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            init_cpu_process_group=True,
+        )
         model_parallel_cuda_manual_seed(1234)
 
         # Create TransformerConfig for Megatron

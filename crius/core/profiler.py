@@ -89,13 +89,6 @@ class CriusDistProfiler:
         if check_oom:
             (max_stage_weight_mem, max_stage_act_mem, 
             max_stage_optim_mem, max_stage_grad_mem) = estimate_model_memory_access_gb(parallelism_plan, graph, bw_graph)
-            
-            print(max_stage_weight_mem, max_stage_act_mem, max_stage_optim_mem, max_stage_grad_mem)
-            print(np.sum(
-                max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
-            ))
-            exit(0)
-            
             if np.sum(
                 max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
             ) > global_configs.per_device_memory_capacity_in_gb:

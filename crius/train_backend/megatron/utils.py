@@ -48,6 +48,10 @@ def initialize_virtual_distributed(
 
     assert init_cpu_process_group
     torchrun_world_size = int(os.environ['WORLD_SIZE'])
+    assert torchrun_world_size == max(
+        tensor_model_parallel_size * pipeline_model_parallel_size, 
+        num_nodes * num_devices_per_node,
+    ), f"The world size of torchrun ({torchrun_world_size}) is not properly set."
     rank = int(os.environ['LOCAL_RANK'])
     torch.distributed.init_process_group(world_size=torchrun_world_size, rank=rank, backend='gloo')
 
