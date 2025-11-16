@@ -270,6 +270,7 @@ class GPTModel(LanguageModule):
         data_iterator,
         optimizer,
         num_microbatches: int,
+        seq_len: int, 
         forward_only: bool = False,
     ):
         forward_backward_func = self.get_forward_backward_func()
@@ -288,6 +289,7 @@ class GPTModel(LanguageModule):
             model=self,
             optimizer=optimizer,
             num_microbatches=num_microbatches,
+            seq_len=seq_len,
             forward_only=forward_only,
         )
         

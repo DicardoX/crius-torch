@@ -91,7 +91,7 @@ class MLP(MegatronModule):
 
         # NOTE: Naive activation function for compilation.
         intermediate_parallel = self.activation_func(intermediate_parallel)
-
+        # print(per_token_scale)
         if per_token_scale is not None:
             original_dtype = intermediate_parallel.dtype
             intermediate_parallel = intermediate_parallel * per_token_scale.unsqueeze(-1)

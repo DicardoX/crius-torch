@@ -214,6 +214,7 @@ def test_pipeline_parallel_training():
             post_process=is_last,
         )
         model = model.cuda()
+        print(model.config)
         
         # 创建数据（只有第一个阶段需要真实数据）
         if is_first:
@@ -223,6 +224,7 @@ def test_pipeline_parallel_training():
             # 包装迭代器，自动将数据移到GPU
             def gpu_data_iterator():
                 for batch in dataloader:
+                    print(len(batch.items()))
                     yield {k: v.cuda() for k, v in batch.items()}
             
             data_iterator = gpu_data_iterator()

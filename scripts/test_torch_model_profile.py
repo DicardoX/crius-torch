@@ -28,6 +28,7 @@ from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.enums import ModelType
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import Dataset, DataLoader
 
 class ToyLayer(nn.Module):
     def __init__(self, hidden_size: int, device: str, dtype: str = torch.float16) -> None:
@@ -619,21 +620,45 @@ class TorchModelProfileTest(unittest.TestCase):
                 return self.layer_norm(hidden_states)
         
         def model_provider(
-            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
-            megatron_config: Any = None, use_toy: bool = False,
+            hidden_size: int, 
+            num_layers: int, 
+            max_seq_len: int, 
+            vocab_size: int, 
+            device: str, 
+            dtype: str, 
+            megatron_config: Any = None, 
+            use_toy: bool = False, 
+            _pre_process: bool = False, 
+            _post_process: bool = False
         ) -> nn.Module:
             """ Model provider function. """
             if use_toy:
                 return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
             else:
-                return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
+                return GPTModel(megatron_config, vocab_size, max_seq_len, device=device, pre_process=_pre_process, post_process=_post_process)
 
+        class DummyDataset(Dataset):
+            def __init__(self, num_samples=100, seq_len=128, vocab_size=1000):
+                self.num_samples = num_samples
+                self.seq_len = seq_len
+                self.vocab_size = vocab_size
+            
+            def __len__(self):
+                return self.num_samples
+            
+            def __getitem__(self, idx):
+                return {
+                    'input_ids': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                    'position_ids': torch.arange(self.seq_len),
+                    'attention_mask': torch.tril(torch.ones(self.seq_len, self.seq_len)).bool().unsqueeze(0),  # 因果mask，布尔类型
+                    'labels': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                }
 
-        global_bs = 8
+        global_bs = 4
         seq_len = 128
-        num_micro_batches = 2
-        hidden_size = 128
-        num_layers = 4
+        num_micro_batches = 1
+        hidden_size = 256
+        num_layers = 1
         data_dtype = torch.long
         dtype = torch.float16
         device = "cuda"
@@ -641,8 +666,8 @@ class TorchModelProfileTest(unittest.TestCase):
         use_toy = False
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -714,14 +739,21 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Create TransformerConfig for Megatron
         megatron_config = TransformerConfig(
-            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
-            num_layers=num_layers,
-            hidden_size=hidden_size,
-            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
-            params_dtype=dtype,
-            pipeline_dtype=dtype,
-            fp16=True,
+            # tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            # pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            # num_layers=num_layers,
+            # hidden_size=hidden_size,
+            # num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            # params_dtype=dtype,
+            # pipeline_dtype=dtype,
+            # fp16=True,
+            num_layers=4,
+            hidden_size=256,
+            num_attention_heads=4,
+            pipeline_model_parallel_size=2,
+            tensor_model_parallel_size=1,
+            pipeline_dtype=torch.float32,  # 必须指定
+            params_dtype=torch.float32,
         )
         setattr(megatron_config, "max_sequence_length", seq_len)
         setattr(megatron_config, "vocab_size", vocab_size)
@@ -741,6 +773,8 @@ class TorchModelProfileTest(unittest.TestCase):
                 "dtype": dtype,
                 "megatron_config": megatron_config,
                 "use_toy": use_toy,
+                "_pre_process": False,
+                "_post_process": False
             },
             device_str=device,
             # fake_device_str=device,
@@ -787,6 +821,24 @@ class TorchModelProfileTest(unittest.TestCase):
         exit(0)
 
         ################# Real profiling #################
+        if not parallel_state.model_parallel_is_initialized():
+            try: 
+                parallel_state.initialize_model_parallel(
+                    tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+                    pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+                )
+            except:
+                print("Failed to set [parallel_state].")
+
+        rank = dist.get_rank()
+
+        pipeline_rank = parallel_state.get_pipeline_model_parallel_rank()
+        is_first = parallel_state.is_pipeline_first_stage()
+        is_last = parallel_state.is_pipeline_last_stage()
+
+        print(f"[Rank {rank}] Pipeline rank: {pipeline_rank}, "
+              f"First: {is_first}, Last: {is_last}")
+
         _model_loader_class = ModelLoader
         model_loader = _model_loader_class(
             model_provider=model_provider,
@@ -799,6 +851,8 @@ class TorchModelProfileTest(unittest.TestCase):
                 "dtype": dtype,
                 "megatron_config": megatron_config,
                 "use_toy": use_toy,
+                "_pre_process": is_first,
+                "_post_process": is_last
             },
             device_str=device,
         )
@@ -819,29 +873,115 @@ class TorchModelProfileTest(unittest.TestCase):
 
         data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, torch.long, device) 
                 for _ in range(num_micro_batches)]
-        # print(data)
+
+        measured_e2e_latency = 0.0
+
+        if global_configs.pipeline_model_parallel_size <= 1:
+            
+            # Warmup
+            for _ in range(100):
+                with torch.no_grad():
+                    _ = model(**data[0])
+            torch.cuda.synchronize(device)
         
-        # Warmup
-        for _ in range(100):
-            with torch.no_grad():
-                _ = model(**data[0])
-        torch.cuda.synchronize(device)
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)  
+
+            # Measure
+            start_event.record()
+            for _ in range(1000):
+                with torch.no_grad():
+                    _ = model(**data[0])
+            end_event.record()
+
+            end_event.synchronize()
+            total_time_ms = start_event.elapsed_time(end_event)
+            avg_latency_ms = total_time_ms / 1000     
+            stage_latencies_ms = [avg_latency_ms]
+            measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        else:   
+            
+            # def register_debug_hooks(model):
     
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)  
+            #     def hook_fn(module, input, output, layer_name):
+            #         print(f"\n=== {layer_name} ===")
+            #         print(f"Module type: {type(module).__name__}")
+            #         print(f"Input shapes: {[inp.shape if hasattr(inp, 'shape') else str(type(inp)) for inp in input]}")
+            #         print(f"Output shape: {output.shape if hasattr(output, 'shape') else str(type(output))}")
+                    
+            #         # 如果是特定模块，打印更多信息
+            #         if hasattr(module, 'weight'):
+            #             print(f"Weight shape: {module.weight.shape}")
+            #         if hasattr(module, 'in_features'):
+            #             print(f"in_features: {module.in_features}, out_features: {module.out_features}")
+                
+            #     hooks = []
+            #     # 递归注册hook到所有子模块
+            #     for name, module in model.named_modules():
+            #         if name:  # 跳过根模块
+            #             hook = module.register_forward_hook(
+            #                 lambda m, i, o, name=name: hook_fn(m, i, o, name)
+            #             )
+            #             hooks.append(hook)
+                
+            #     return hooks
 
-        # Measure
-        start_event.record()
-        for _ in range(1000):
-            with torch.no_grad():
-                _ = model(**data[0])
-        end_event.record()
+            # if rank == 0:
+                # hooks = register_debug_hooks(model.module)  # 去掉DistributedDataParallel包装
+            
+            # print(model.config)
+            if is_first:
+                dataset = DummyDataset(num_samples=1000, seq_len=seq_len, vocab_size=vocab_size)
+                dataloader = DataLoader(
+                    dataset, 
+                    batch_size=num_micro_batches, 
+                    # collate_fn=custom_collate_fn
+                )
+                
+                def gpu_data_iterator():
+                    for batch in dataloader:
+                        # print(len(batch.items()))
+                        yield {k: v.cuda() for k, v in batch.items()}
+                
+                data_iterator = gpu_data_iterator()
+            else:
+                data_iterator = None
 
-        end_event.synchronize()
-        total_time_ms = start_event.elapsed_time(end_event)
-        avg_latency_ms = total_time_ms / 1000     
-        stage_latencies_ms = [avg_latency_ms]
-        measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+            
+            # Warmup
+            print(f"[Global Rank {rank}] Starting warmup...")
+            for _ in range(100):
+                losses = model.module.pipeline_forward_backward(
+                    data_iterator=data_iterator,
+                    optimizer=optimizer,
+                    num_microbatches=num_micro_batches,
+                    seq_len=seq_len, 
+                    forward_only=False
+                )
+            # torch.cuda.synchronize(device)
+            dist.barrier()
+            
+            print(f"[Global Rank {rank}] Starting measurement...")
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)  
+            
+            start_event.record()
+            for _ in range(100):
+                losses = model.module.pipeline_forward_backward(
+                    data_iterator=data_iterator,
+                    optimizer=optimizer,
+                    num_microbatches=num_micro_batches,
+                    seq_len=seq_len, 
+                    forward_only=False
+                )
+            end_event.record()    
+            
+            end_event.synchronize()
+            total_time_ms = start_event.elapsed_time(end_event)
+            avg_latency_ms = total_time_ms / 100
+            stage_latencies_ms = [avg_latency_ms]
+            measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 

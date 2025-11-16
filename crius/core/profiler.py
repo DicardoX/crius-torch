@@ -108,7 +108,7 @@ class CriusDistProfiler:
             latency = getattr(node, "latency", None)
 
             if dist.get_rank() == 0 and save_node_info == True:
-                with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
+                with open('/app/scripts/c_graph_tp4.txt', 'a', encoding = 'utf-8') as f:
                     f.write(f"{prefix_str_}Node target: {node.target} | " + 
                             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
@@ -126,7 +126,7 @@ class CriusDistProfiler:
                 latency = getattr(node, "latency", None)
 
                 if dist.get_rank() == 0 and save_node_info == True:
-                    with open('/app/scripts/c_graph_dp2.txt', 'a', encoding = 'utf-8') as f:
+                    with open('/app/scripts/c_graph_tp4.txt', 'a', encoding = 'utf-8') as f:
                         f.write(f"{prefix_str_}Node target: {node.target} | " + 
                                 f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                                 f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 

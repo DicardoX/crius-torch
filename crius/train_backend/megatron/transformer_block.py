@@ -130,6 +130,10 @@ class TransformerBlock(MegatronModule):
         #   likely redundant, since p2p_communication.py (likely originator)
         #   already creates viewless tensors. That said, make_viewless_tensor()
         #   is called here to be future-proof and corner-case-proof.
+        # print(f"hidden_states before make_viewless_tensor: {hidden_states}")
+        # print(f"hidden_states type: {type(hidden_states)}")
+        # print(f"hidden_states is None: {hidden_states is None}")
+
         hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
 
         # Forward pass

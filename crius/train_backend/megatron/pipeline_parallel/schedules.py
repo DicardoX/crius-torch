@@ -183,6 +183,7 @@ def forward_backward_pipelining_without_interleaving(
     model,
     optimizer,
     num_microbatches: int,
+    seq_len: int,
     forward_only: bool = False,
     collect_non_loss_data: bool = False,
 ):
@@ -208,7 +209,7 @@ def forward_backward_pipelining_without_interleaving(
     def get_tensor_shape():
         if hasattr(model, 'config') and hasattr(model.config, 'hidden_size'):
             # [seq_len, batch_size, hidden_size]
-            return [32, 4, model.config.hidden_size]
+            return [seq_len, num_microbatches, model.config.hidden_size]
         return None
     
     def get_dtype():
@@ -361,6 +362,7 @@ def forward_backward_pipelining_with_interleaving(
     model,
     optimizer,
     num_microbatches: int,
+    seq_len: int,
     forward_only: bool = False,
     collect_non_loss_data: bool = False,
 ):
