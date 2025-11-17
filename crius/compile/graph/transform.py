@@ -15,6 +15,7 @@ from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
 from crius.global_envs import global_configs, logger
 
+
 __all__ = [
     "transform_to_ir_graph",
     "propagate_node_shapes",
@@ -32,7 +33,7 @@ def transform_to_ir_graph(model: nn.Module, *input_args, **input_kwargs) -> Tupl
         input_args: Model input arguments.
         input_kwargs: Model input keyword arguments.
     """
-
+    
     fx_module = dynamo.export(model)(*input_args, **input_kwargs)[0]
     fx_graph = fx_module.graph
     # Construct IR graph
@@ -464,5 +465,5 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             pass    # Directly return out_grad, which are the same across all ranks, as outputs are the same after allreduce in forward
         else:
             pass    # Other non-dominant operators
-
+    # print(bw_graph)
     return bw_graph

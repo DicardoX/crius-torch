@@ -17,7 +17,11 @@ from megatron.core.transformer.enums import ModelType
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, LanguageModelEmbedding
 from crius.train_backend.megatron.transformer_block import TransformerBlock
+
 from crius.global_envs import logger, global_configs
+
+from crius.train_backend.megatron.pipeline_parallel import schedules, p2p_communication
+
 
 
 class GPTModel(LanguageModule):
@@ -258,4 +262,38 @@ class GPTModel(LanguageModule):
 
         # [s b] => [b, s]
         # loss = loss.transpose(0, 1).contiguous()
-        return loss        
+        return loss
+    
+    def get_forward_backward_func(self):
+        
+        return schedules.get_forward_backward_func()
+    
+    def pipeline_forward_backward(
+        self,
+        data_iterator,
+        optimizer,
+        num_microbatches: int,
+        seq_len: int, 
+        forward_only: bool = False,
+    ):
+        forward_backward_func = self.get_forward_backward_func()
+        
+        def forward_step(model, data_iterator, input_tensor, forward_only):
+            return schedules.forward_step(
+                model=model,
+                data_iterator=data_iterator,
+                input_tensor=input_tensor,
+                forward_only=forward_only,
+            )
+        
+        losses = forward_backward_func(
+            forward_step_func=forward_step,
+            data_iterator=data_iterator,
+            model=self,
+            optimizer=optimizer,
+            num_microbatches=num_microbatches,
+            seq_len=seq_len,
+            forward_only=forward_only,
+        )
+        
+        return losses

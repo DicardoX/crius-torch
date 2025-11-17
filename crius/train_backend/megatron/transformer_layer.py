@@ -126,7 +126,9 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         # Optional Input Layer norm
         input_layernorm_output = self.input_layernorm(hidden_states)
-
+        
+        # print(f"input shape: {hidden_states.shape}")
+        # print(f'crius-debug:{attention_mask.shape}\n')
         # Self attention
         attention_output_with_bias = self.self_attention(
             input_layernorm_output,
