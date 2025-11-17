@@ -99,6 +99,290 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile_all_gemm()
 
     @unittest.skip("Pass.")
+    def test_device_free_profiling(self):
+        """ Profile a Megatron model in a device-free manner. """
+
+        # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.transformer.transformer_config import TransformerConfig
+        from megatron.core.transformer.module import MegatronModule
+        from megatron.core import mpu
+        # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
+        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+
+        from crius.train_backend.megatron.utils import initialize_virtual_distributed
+        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+        from crius.train_backend.megatron.transformer_layer import TransformerLayer
+        from crius.train_backend.megatron.gpt_model import GPTModel
+
+        def model_provider(
+            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
+            megatron_config: Any = None, use_toy: bool = False,
+        ) -> nn.Module:
+            """ Model provider function. """
+            return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
+
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 2
+        hidden_size = 4096
+        num_layers = 4
+        data_dtype = torch.long
+        dtype = torch.float16
+        device = "cpu"
+        vocab_size = 50000
+        
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
+        global_configs.training_backend = "megatron"
+        global_configs.only_forward = False
+        global_configs.enable_backward_graph_generation = True
+        if device == "cpu":
+            logger.warning(
+                "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +
+                "Currently we recommend using shadow model loader to reduce device memory consumption."
+            )
+            device = "cuda"
+            global_configs.current_device = torch.cuda.current_device()
+            global_configs.use_shadow_model_loader = True
+
+        # Parallelism plan
+        pipeline_stage_partition_method = "uniform"
+        pipeline_use_boundary_markers = True
+        pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
+        pipeline_boundary_end_marker = ['dropout', 'add', ]
+
+        parallelism_plan = ParallelismPlan(
+            pipeline_type="1f1b",
+            pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            num_microbatches=num_micro_batches,
+            tensor_parallel_degree=global_configs.tensor_model_parallel_size,
+            data_parallel_degree=global_configs.data_parallel_size,
+            pipeline_stage_partition_method=pipeline_stage_partition_method,
+            pipeline_use_boundary_markers=pipeline_use_boundary_markers,
+            pipeline_boundary_start_marker=pipeline_boundary_start_marker,
+            pipeline_boundary_end_marker=pipeline_boundary_end_marker,
+        )
+
+        # We manually set the communication op insertion rules
+        global_configs.comm_op_insert_rules = {
+            "all_reduce:tp:forward": {
+                # "after_nodes": ['fc2', ],
+                # "after_nodes": ['matmul', ],
+                "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
+                "after_nodes": ['contiguous', ],
+                "interval": 1,
+                "pass": 'forward',
+                "parallelism": 'tp',
+            },
+            "all_reduce:dp:backward": {
+                "after_markers": [],
+                "after_nodes": ['weight_grad_reduce_sum', ],
+                "interval": 1,
+                "pass": 'backward',
+                "parallelism": 'dp',
+            },
+            "all_reduce:tp:backward": {
+                "after_markers": [],
+                "after_nodes": ['weight_grad_reduce_sum', ],
+                "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
+                "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
+                "pass": 'backward',
+                "parallelism": 'tp',
+            },
+        }
+
+        # Init distributed
+        initialize_virtual_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            init_cpu_process_group=True,
+        )
+        model_parallel_cuda_manual_seed(1234)
+
+        # Create TransformerConfig for Megatron
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
+            fp16=True,
+        )
+        setattr(megatron_config, "max_sequence_length", seq_len)
+        setattr(megatron_config, "vocab_size", vocab_size)
+        setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
+
+        # Model
+        _model_loader_class = ShadowModelLoader if global_configs.use_shadow_model_loader else ModelLoader
+        kwargs = {"device_str": device} if not global_configs.use_shadow_model_loader else {"fake_device_str": device}
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
+                "device": device,
+                "dtype": dtype,
+                "megatron_config": megatron_config,
+            },
+            **kwargs,
+        )
+        model = model_loader.load()
+        
+        # Inputs
+        input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+        attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+        decoder_input = None
+        labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        input_args = ()
+        input_kwargs = {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
+            "decoder_input": decoder_input,
+            "labels": labels,
+        }
+
+        # Profile
+        profiler = CriusDistProfiler(
+            profiled_data_path='./crius/offline/prof_data.pkl',
+        )
+        e2e_latency = profiler.profile(
+            model=model,
+            parallelism_plan=parallelism_plan,
+            only_forward=global_configs.only_forward,
+            base_input_args=input_args,
+            base_input_kwargs=input_kwargs,
+            partition_pipeline_stages_func=CriusParallelPlanner.partition_pipeline_stages,
+        )
+
+        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
+
+    # @unittest.skip("Pass.")
+    def test_meagtron_ground_truth(self):
+        """ Run the parallelized Megatron model as the ground truth. """
+
+        # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.transformer.transformer_config import TransformerConfig
+        from megatron.core.transformer.module import MegatronModule
+        from megatron.core import mpu
+        # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
+        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+
+        from crius.train_backend.megatron.utils import initialize_distributed
+        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+        from crius.train_backend.megatron.transformer_layer import TransformerLayer
+        from crius.train_backend.megatron.gpt_model import GPTModel
+
+        def model_provider(
+            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
+            megatron_config: Any = None, use_toy: bool = False,
+        ) -> nn.Module:
+            """ Model provider function. """
+            return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
+
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 2
+        hidden_size = 4096
+        num_layers = 4
+        data_dtype = torch.long
+        dtype = torch.float16
+        device = "cuda"
+        vocab_size = 50000
+        
+        global_configs.training_backend = "megatron"
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 1
+        global_configs.only_forward = False
+        global_configs.enable_backward_graph_generation = True
+
+        # Init distributed
+        initialize_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        )
+        model_parallel_cuda_manual_seed(1234)
+
+        # Create TransformerConfig for Megatron
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
+            fp16=True,
+        )
+
+        # Model
+        _model_loader_class = ModelLoader
+        model_loader = _model_loader_class(
+            model_provider=model_provider,
+            model_kwargs={
+                "hidden_size": hidden_size,
+                "num_layers": num_layers,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
+                "device": device,
+                "dtype": dtype,
+                "megatron_config": megatron_config,
+            },
+            device_str=device,
+        )
+        model = model_loader.load()
+        
+        # Inputs
+        input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+        attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+        decoder_input = None
+        labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        input_args = ()
+        input_kwargs = {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
+            "decoder_input": decoder_input,
+            "labels": labels,
+        }
+
+        # Warmup
+        for _ in range(100):
+            with torch.no_grad():
+                _ = model(*input_args, **input_kwargs)
+            
+            exit(0)
+        
+        torch.cuda.synchronize(device)
+    
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+        # Measure
+        start_event.record()
+        for _ in range(1000):
+            with torch.no_grad():
+                _ = model(*input_args, **input_kwargs)
+        end_event.record()
+
+        end_event.synchronize()
+        total_time_ms = start_event.elapsed_time(end_event)
+        avg_latency_ms = total_time_ms / 1000     
+        stage_latencies_ms = [avg_latency_ms]
+        measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        
+        print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
+
+    # ===================> Deprecated tests
+    @unittest.skip("Deprecated.")
     def test_torch_model_profiling(self):
         """ Profile a naive torch model. """
         
@@ -223,7 +507,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
             prof.export_chrome_trace('/app/torch_exec_trace.json')
 
-    @unittest.skip("Pass.")
+    @unittest.skip("Deprecated.")
     def test_megatron_model_profiling(self):
         """ Profile a Megatron model. """
 
@@ -521,171 +805,6 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    # @unittest.skip("Pass.")
-    def test_device_free_profiling(self):
-        """ Profile a Megatron model in a device-free manner. """
-
-        # from megatron.core.model_parallel_config import ModelParallelConfig
-        from megatron.core.transformer.transformer_config import TransformerConfig
-        from megatron.core.transformer.module import MegatronModule
-        from megatron.core import mpu
-        # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
-        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
-
-        from crius.train_backend.megatron.utils import initialize_virtual_distributed
-        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
-        from crius.train_backend.megatron.transformer_layer import TransformerLayer
-        from crius.train_backend.megatron.gpt_model import GPTModel
-
-        def model_provider(
-            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
-            megatron_config: Any = None, use_toy: bool = False,
-        ) -> nn.Module:
-            """ Model provider function. """
-            return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
-
-        global_bs = 8
-        seq_len = 2048
-        num_micro_batches = 2
-        hidden_size = 4096
-        num_layers = 4
-        data_dtype = torch.long
-        dtype = torch.float16
-        device = "cpu"
-        vocab_size = 50000
-        
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 1
-        global_configs.training_backend = "megatron"
-        global_configs.only_forward = False
-        global_configs.enable_backward_graph_generation = True
-        if device == "cpu":
-            logger.warning(
-                "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +
-                "Currently we recommend using shadow model loader to reduce device memory consumption."
-            )
-            device = "cuda"
-            global_configs.current_device = torch.cuda.current_device()
-            global_configs.use_shadow_model_loader = True
-
-        # Parallelism plan
-        pipeline_stage_partition_method = "uniform"
-        pipeline_use_boundary_markers = True
-        pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
-        pipeline_boundary_end_marker = ['dropout', 'add', ]
-
-        parallelism_plan = ParallelismPlan(
-            pipeline_type="1f1b",
-            pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
-            num_layers=num_layers,
-            num_microbatches=num_micro_batches,
-            tensor_parallel_degree=global_configs.tensor_model_parallel_size,
-            data_parallel_degree=global_configs.data_parallel_size,
-            pipeline_stage_partition_method=pipeline_stage_partition_method,
-            pipeline_use_boundary_markers=pipeline_use_boundary_markers,
-            pipeline_boundary_start_marker=pipeline_boundary_start_marker,
-            pipeline_boundary_end_marker=pipeline_boundary_end_marker,
-        )
-
-        # We manually set the communication op insertion rules
-        global_configs.comm_op_insert_rules = {
-            "all_reduce:tp:forward": {
-                # "after_nodes": ['fc2', ],
-                # "after_nodes": ['matmul', ],
-                "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
-                "after_nodes": ['contiguous', ],
-                "interval": 1,
-                "pass": 'forward',
-                "parallelism": 'tp',
-            },
-            "all_reduce:dp:backward": {
-                "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
-                "interval": 1,
-                "pass": 'backward',
-                "parallelism": 'dp',
-            },
-            "all_reduce:tp:backward": {
-                "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
-                "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
-                "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
-                "pass": 'backward',
-                "parallelism": 'tp',
-            },
-        }
-
-        # Init distributed
-        initialize_virtual_distributed(
-            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
-            init_cpu_process_group=True,
-        )
-        model_parallel_cuda_manual_seed(1234)
-
-        # Create TransformerConfig for Megatron
-        megatron_config = TransformerConfig(
-            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
-            num_layers=num_layers,
-            hidden_size=hidden_size,
-            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
-            params_dtype=dtype,
-            pipeline_dtype=dtype,
-            fp16=True,
-        )
-        setattr(megatron_config, "max_sequence_length", seq_len)
-        setattr(megatron_config, "vocab_size", vocab_size)
-        setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
-
-        # Model
-        _model_loader_class = ShadowModelLoader if global_configs.use_shadow_model_loader else ModelLoader
-        kwargs = {"device_str": device} if not global_configs.use_shadow_model_loader else {"fake_device_str": device}
-        model_loader = _model_loader_class(
-            model_provider=model_provider,
-            model_kwargs={
-                "hidden_size": hidden_size,
-                "num_layers": num_layers,
-                "max_seq_len": seq_len,
-                "vocab_size": vocab_size,
-                "device": device,
-                "dtype": dtype,
-                "megatron_config": megatron_config,
-            },
-            **kwargs,
-        )
-        model = model_loader.load()
-        
-        # Inputs
-        input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
-        attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
-        decoder_input = None
-        labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        input_args = ()
-        input_kwargs = {
-            "input_ids": input_ids,
-            "position_ids": position_ids,
-            "attention_mask": attention_mask,
-            "decoder_input": decoder_input,
-            "labels": labels,
-        }
-
-        # Profile
-        profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
-        )
-        e2e_latency = profiler.profile(
-            model=model,
-            parallelism_plan=parallelism_plan,
-            only_forward=global_configs.only_forward,
-            base_input_args=input_args,
-            base_input_kwargs=input_kwargs,
-            partition_pipeline_stages_func=CriusParallelPlanner.partition_pipeline_stages,
-        )
-
-        print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
 
 if __name__ == '__main__':
