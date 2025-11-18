@@ -109,7 +109,7 @@ class ColumnParallelLinear(torch.nn.Module):
             )
         else:
             self.register_parameter("bias", None)
-    
+
     def forward(
         self,
         input_: torch.Tensor,

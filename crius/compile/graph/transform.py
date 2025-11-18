@@ -19,6 +19,7 @@ __all__ = [
     "transform_to_ir_graph",
     "propagate_node_shapes",
     "infer_node_layer_types",
+    "shard_compute_node_input_output_shapes",
     "insert_comm_primitives_into_graph",
     "construct_backward_graph",
 ]
@@ -171,6 +172,63 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
     return graph
 
 
+def shard_compute_node_input_output_shapes(
+    graph: IRGraph, 
+    parallelism_plan: ParallelismPlan,
+) -> IRGraph:
+    """ Shard compute nodes' input and output shapes (e.g., QKV proj) based on the parallelism 
+    plan, currently only consider sharding dominant (e.g., GEMM) nodes. 
+
+    Notably, this function is only used for the tuner, since Megatron's global world sizes 
+    (e.g., TP) are not set -> weight shapes of model's Column/RowParallelLinear are not sharded.
+
+    Args:
+        graph: IR graph to be sharded.
+        parallelism_plan: How the to-be-compiled model would be parallelized.
+    """
+
+    # All dominant nodes to be sharded
+    dominant_node_infos_tp = [
+        "self_attention_linear_qkv_weight",
+        "self_attention_linear_proj_weight",
+        "mlp_linear_fc1_weight",
+        "mlp_linear_fc2_weight",
+    ]
+    tp_size = parallelism_plan.tensor_parallel_degree
+
+    cur_marker, cur_marker_keyword = None, None
+    for node in graph.nodes:
+        if "L__self___module" in str(node.target):
+            cur_marker = str(node.target)
+            cur_marker_keyword = None   # Reset
+            for kw in dominant_node_infos_tp:
+                if kw in cur_marker:
+                    cur_marker_keyword = kw
+                    break
+
+        if cur_marker_keyword in ("self_attention_linear_qkv_weight", "mlp_linear_fc1_weight", ):
+            # Column parallel linear
+            if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
+                assert len(node.input_shapes) == 2
+                assert len(node.output_shapes) == 1
+                (b, s, h1) = node.input_shapes[0]
+                h2 = node.input_shapes[1][-1]
+                node.input_shapes[1] = torch.Size([h1, h2 // tp_size])
+                node.output_shapes[0] = torch.Size([b, s, h2 // tp_size])
+
+        elif cur_marker_keyword in ("self_attention_linear_proj_weight", "mlp_linear_fc2_weight", ):
+            # Row parallel linear
+            if node.layer_type == "gemm": 
+                assert len(node.input_shapes) == 2
+                assert len(node.output_shapes) == 1
+                (b, s, h1) = node.input_shapes[0]
+                h2 = node.input_shapes[1][-1]
+                node.input_shapes[0] = torch.Size([b, s, h1 // tp_size])
+                node.input_shapes[1] = torch.Size([h1 // tp_size, h2])
+    
+    return graph
+
+
 def insert_comm_primitives_into_graph(
     graph: IRGraph,
     parallelism_plan: ParallelismPlan,
@@ -316,7 +374,12 @@ def _insert_comm_primitives_into_graph_impl(
 def _infer_comm_node_input_output_shapes(
     prev_node: IRNode, primitive_type: str, node_pass: str, node_parallelism: str,
 ) -> Tuple[List[Any], List[Any]]:
-    """ Case-specific infer the input/output shapes of a communication node. """
+    """ Case-specific infer the input/output shapes of a communication node. 
+    
+    TODO(chunyu): For shape-variable primitives (e.g., all-gather), we should consider parallel degree here.
+    For example, when all-gather model parameters in forward pass for FSDP, the output shapes should be 
+    n_ranks * input_shapes.
+    """
 
     if primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "dp":
         # All-reduce the weight gradients (output) of previous node

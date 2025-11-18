@@ -13,8 +13,8 @@ from torch import nn
 from torch.fx import GraphModule
 
 from crius.compile.graph.transform import (
-    transform_to_ir_graph, propagate_node_shapes, infer_node_layer_types, insert_comm_primitives_into_graph,
-    construct_backward_graph)
+    transform_to_ir_graph, propagate_node_shapes, infer_node_layer_types, shard_compute_node_input_output_shapes, 
+    insert_comm_primitives_into_graph, construct_backward_graph)
 from crius.compile.graph.graph import (IRNode, IRGraph)
 from crius.model_parallel.utils import ParallelismPlan
 
@@ -82,19 +82,16 @@ def postcompile(
         parallelism_plan: The parallelism plan for the model to be profiled with.
     """
 
-    # Step 3. Check TP hidden size and shard if needed
-    _check_tp_hidden_size_and_shard_if_needed()
+    graph = deepcopy(precompiled_graph)     # NOTE: The deepcopy is necessary to maintain independent graphs for 
+                                            # different parallelism plans.
+    # Step 3. Shard node input/output shapes
+    graph = shard_compute_node_input_output_shapes(graph, parallelism_plan)
     # Step 4. Insert communication primitives
-    # NOTE: The deepcopy is necessary to maintain independent graphs for different parallelism plans
-    graph = insert_comm_primitives_into_graph(deepcopy(precompiled_graph), parallelism_plan, forward_pass=True)
+    graph = insert_comm_primitives_into_graph(graph, parallelism_plan, forward_pass=True)
     # Step 5. Construct backward graph
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, parallelism_plan, forward_pass=False)
     return graph, bw_graph
-
-
-def _check_tp_hidden_size_and_shard_if_needed():
-    raise NotImplementedError
 
 
 def compile(
