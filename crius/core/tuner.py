@@ -88,10 +88,6 @@ class CriusParallelTuner:
                     if this_e2e_latency < least_e2e_latency:
                         optimal_plan = plan
                         least_e2e_latency = this_e2e_latency
-                    
-                    if plan.tensor_parallel_degree > 1:
-                        print(plan)
-                        exit(0)
             else:
                 raise ValueError(f"Invalid grid plan optimization mode: {self.grid_plan_optimization_mode}") 
 

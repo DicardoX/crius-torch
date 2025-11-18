@@ -228,7 +228,7 @@ class CriusParallelPlanner:
 
         (max_stage_weight_mem, max_stage_act_mem, 
          max_stage_optim_mem, max_stage_grad_mem) = estimate_model_memory_access_gb(parallelism_plan)
-        if np.sum(
+        if (
             max_stage_weight_mem + max_stage_act_mem + max_stage_optim_mem + max_stage_grad_mem
         ) > global_configs.per_device_memory_capacity_in_gb:
             return 1e20    # OOM occurs

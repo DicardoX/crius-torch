@@ -52,7 +52,7 @@ class ParallelTuneTest(unittest.TestCase):
         seq_len = 1024
         num_micro_batches = 4
         hidden_size = 4096
-        num_attention_heads = 4
+        num_attention_heads = 32
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16

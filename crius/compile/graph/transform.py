@@ -193,6 +193,7 @@ def shard_compute_node_input_output_shapes(
         "self_attention_linear_proj_weight",
         "mlp_linear_fc1_weight",
         "mlp_linear_fc2_weight",
+        "self_attention_core_attention_attention_dropout",
     ]
     tp_size = parallelism_plan.tensor_parallel_degree
 
@@ -207,18 +208,40 @@ def shard_compute_node_input_output_shapes(
                     break
 
         if cur_marker_keyword in ("self_attention_linear_qkv_weight", "mlp_linear_fc1_weight", ):
-            # Column parallel linear
             if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
+                # Column parallel linear
                 assert len(node.input_shapes) == 2
                 assert len(node.output_shapes) == 1
                 (b, s, h1) = node.input_shapes[0]
                 h2 = node.input_shapes[1][-1]
                 node.input_shapes[1] = torch.Size([h1, h2 // tp_size])
                 node.output_shapes[0] = torch.Size([b, s, h2 // tp_size])
+            
+            elif node.layer_type == "baddbmm":    
+                # [b * num_heads, s, s] + [b * num_heads, s, head_dim] x [b * num_heads, head_dim, s]
+                assert len(node.input_shapes) == 3
+                assert len(node.output_shapes) == 1
+                (b, s, _) = node.input_shapes[0]    # Here, `b` denotes batch size * num heads
+                h1 = node.input_shapes[1][-1]       # Here, `h1` denotes head dimention
+                node.input_shapes[0] = torch.Size([b // tp_size, s, s])
+                node.input_shapes[1] = torch.Size([b // tp_size, s, h1])
+                node.input_shapes[2] = torch.Size([b // tp_size, h1, s])
+                node.output_shapes[0] = torch.Size([b // tp_size, s, s])
+        
+        elif cur_marker_keyword == "self_attention_core_attention_attention_dropout":
+            if node.layer_type == "bmm":
+                # [b * num_heads, s, s] x [b * num_heads, s, head_dim]
+                assert len(node.input_shapes) == 2
+                assert len(node.output_shapes) == 1
+                (b, s, _) = node.input_shapes[0]    # Here, `b` denotes batch size * num heads
+                h1 = node.input_shapes[1][-1]       # Here, `h1` denotes head dimention
+                node.input_shapes[0] = torch.Size([b // tp_size, s, s])
+                node.input_shapes[1] = torch.Size([b // tp_size, s, h1])
+                node.output_shapes[0] = torch.Size([b // tp_size, s, h1])                
 
         elif cur_marker_keyword in ("self_attention_linear_proj_weight", "mlp_linear_fc2_weight", ):
-            # Row parallel linear
             if node.layer_type == "gemm": 
+                # Row parallel linear
                 assert len(node.input_shapes) == 2
                 assert len(node.output_shapes) == 1
                 (b, s, h1) = node.input_shapes[0]
