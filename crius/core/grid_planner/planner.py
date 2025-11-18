@@ -206,6 +206,9 @@ class CriusParallelPlanner:
             # communication costs, which dominates intra-stage latency as observed in the paper. 
             optimal_plan, least_comm_cost = None, 1e9
             for plan in parallelism_plans:
+                if plan.tensor_parallel_degree > 1:
+                    return [plan, ]
+                
                 this_comm_cost = self._evaluate_communication_cost_with_oom_check(plan)
                 if optimal_plan is None or this_comm_cost < least_comm_cost:
                     optimal_plan = plan

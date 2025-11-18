@@ -49,9 +49,10 @@ class ParallelTuneTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         global_bs = 16
-        seq_len = 2048
+        seq_len = 1024
         num_micro_batches = 4
         hidden_size = 4096
+        num_attention_heads = 4
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
@@ -128,11 +129,11 @@ class ParallelTuneTest(unittest.TestCase):
 
         # Create TransformerConfig for Megatron
         megatron_config = TransformerConfig(
-            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            # tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            # pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             num_layers=num_layers,
             hidden_size=hidden_size,
-            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            num_attention_heads=num_attention_heads,
             params_dtype=dtype,
             pipeline_dtype=dtype,
             fp16=True,

@@ -806,6 +806,5 @@ class TorchModelProfileTest(unittest.TestCase):
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
 
-
 if __name__ == '__main__':
     unittest.main()

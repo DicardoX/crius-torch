@@ -82,13 +82,19 @@ def postcompile(
         parallelism_plan: The parallelism plan for the model to be profiled with.
     """
 
-    # Step 3. Insert communication primitives
+    # Step 3. Check TP hidden size and shard if needed
+    _check_tp_hidden_size_and_shard_if_needed()
+    # Step 4. Insert communication primitives
     # NOTE: The deepcopy is necessary to maintain independent graphs for different parallelism plans
     graph = insert_comm_primitives_into_graph(deepcopy(precompiled_graph), parallelism_plan, forward_pass=True)
-    # Step 4. Construct backward graph
+    # Step 5. Construct backward graph
     bw_graph = construct_backward_graph(graph)
     bw_graph = insert_comm_primitives_into_graph(bw_graph, parallelism_plan, forward_pass=False)
     return graph, bw_graph
+
+
+def _check_tp_hidden_size_and_shard_if_needed():
+    raise NotImplementedError
 
 
 def compile(
