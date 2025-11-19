@@ -194,6 +194,7 @@ def shard_compute_node_input_output_shapes(
         "mlp_linear_fc1_weight",
         "mlp_linear_fc2_weight",
         "self_attention_core_attention_attention_dropout",
+        "output_layer_weight",
     ]
     tp_size = parallelism_plan.tensor_parallel_degree
 
@@ -207,7 +208,9 @@ def shard_compute_node_input_output_shapes(
                     cur_marker_keyword = kw
                     break
 
-        if cur_marker_keyword in ("self_attention_linear_qkv_weight", "mlp_linear_fc1_weight", ):
+        if cur_marker_keyword in (
+            "self_attention_linear_qkv_weight", "mlp_linear_fc1_weight", "output_layer_weight", 
+        ):
             if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
                 # Column parallel linear
                 assert len(node.input_shapes) == 2
