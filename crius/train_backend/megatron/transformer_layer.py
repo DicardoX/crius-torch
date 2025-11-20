@@ -120,7 +120,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
                 context (Tensor): Updated context tensor if cross-attention is used,
                 otherwise None.
         """
-
+        
         # Residual connection.
         residual = hidden_states
 
@@ -139,12 +139,21 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             rotary_pos_cos_sin=rotary_pos_cos_sin,
             attention_bias=attention_bias,
         )
+        # print(f'attention_output_with_bias:{attention_output_with_bias}')
+        # print(f'input_layernorm_output:{input_layernorm_output}')
+        # print(f'attention_bias:{attention_bias}')
 
         with self.bias_dropout_add_exec_handler():
             hidden_states = self.self_attn_bda(self.training, self.config.bias_dropout_fusion)(
                 attention_output_with_bias, residual, self.hidden_dropout
             )
-
+        # print(f'hidden_states:{hidden_states}')
+        # print(f'self.config.bias_dropout_fusion:{self.config.bias_dropout_fusion}')
+        # print(f'attention_output_with_bias:{attention_output_with_bias}')
+        # print(f'residual:{residual}')
+        # print(f'self.hidden_dropout:{self.hidden_dropout}')
+        
+        # exit(0)
         return hidden_states, None
 
     def _forward_mlp(
@@ -164,6 +173,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         """
 
         # Residual connection.
+        # print(hidden_states)
         residual = hidden_states
 
         # Optional Pre MLP Layer norm

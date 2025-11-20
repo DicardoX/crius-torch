@@ -133,9 +133,11 @@ class CriusParallelPlanner:
             this_stage_node_num, cur_stage_index = 0, 0
             for node in graph_.nodes:
                 this_stage_node_num += 1
-                if this_stage_node_num > num_nodes_per_stage_[cur_stage_index]:
-                    cur_stage_index += 1
-                    this_stage_node_num = 0
+                if cur_stage_index < len(num_nodes_per_stage_):
+                    if this_stage_node_num > num_nodes_per_stage_[cur_stage_index]:
+                        cur_stage_index += 1
+                        this_stage_node_num = 0
+
                 
                 setattr(node, "stage_index", cur_stage_index)
 
@@ -158,7 +160,8 @@ class CriusParallelPlanner:
                         cur_layer_index += 1
                         num_marked_nodes = 0
                     
-                    num_fw_nodes_per_layer[max(cur_layer_index, 0)] += 1
+                    if cur_layer_index < parallelism_plan.num_layers:###################################################
+                        num_fw_nodes_per_layer[max(cur_layer_index, 0)] += 1
 
                 assert parallelism_plan.num_layers % parallelism_plan.pipeline_parallel_degree == 0, \
                     f"The number of layers ({parallelism_plan.num_layers}) must be divisible by the pipeline parallel degree ({parallelism_plan.pipeline_parallel_degree})."

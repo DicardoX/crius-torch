@@ -17,12 +17,8 @@ from megatron.core.transformer.enums import ModelType
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, LanguageModelEmbedding
 from crius.train_backend.megatron.transformer_block import TransformerBlock
-
-from crius.global_envs import logger, global_configs
-
+from crius.global_envs import logger
 from crius.train_backend.megatron.pipeline_parallel import schedules, p2p_communication
-
-
 
 class GPTModel(LanguageModule):
     """ GPT model with static submodules for compilation. 
@@ -46,7 +42,7 @@ class GPTModel(LanguageModule):
         position_embedding_type (Literal[learned_absolute,rope], optional):
             Position embedding type.. Defaults to 'learned_absolute'.
         device (Union[str, torch.device], optional):
-            Device to use. Defaults to gloal_configs.current_device.
+            Device to use. Defaults to torch.cuda.current_device().
     """
     
     def __init__(
@@ -62,7 +58,7 @@ class GPTModel(LanguageModule):
             'learned_absolute', 'rope', 'mrope', 'yarn', 'none'
         ] = 'learned_absolute',
         # scatter_embedding_sequence_parallel: bool = True,
-        device: Union[str, torch.device] = global_configs.current_device,
+        device: Union[str, torch.device] = torch.cuda.current_device(),
     ) -> None:
         super().__init__(config)
 
@@ -156,6 +152,8 @@ class GPTModel(LanguageModule):
         if decoder_input is not None and decoder_input.dtype != self.config.params_dtype:
             decoder_input = decoder_input.to(self.config.params_dtype)
 
+        # print(decoder_input)
+        # exit(0)
         return decoder_input
 
     def forward(
@@ -262,8 +260,8 @@ class GPTModel(LanguageModule):
 
         # [s b] => [b, s]
         # loss = loss.transpose(0, 1).contiguous()
-        return loss
-    
+        return loss        
+
     def get_forward_backward_func(self):
         
         return schedules.get_forward_backward_func()

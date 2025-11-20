@@ -40,7 +40,7 @@ class CriusDistProfiler:
         self._profiled_comm_data = self._load_profiled_data(profiled_comm_data_path)
 
         self.MAX_COMM_SIZE = 1 << 28
-        self.LARGE_COMM_SCALE_FACTOR = 1.1
+        self.LARGE_COMM_SCALE_FACTOR = 1.0
         
     def _load_profiled_data(self, profiled_data_path: Optional[str] = None) -> None:
         """ Load profiled data from the given path. 
@@ -237,14 +237,14 @@ class CriusDistProfiler:
             max_comm_time = comm_time_table[key][-1][1]
 
             # if True:
-            if max_profiled_comm_size < MAX_COMM_SIZE // 2:
+            if max_profiled_comm_size < self.MAX_COMM_SIZE // 2:
                 # Only for low bandwidth cases, which linearly scale the comm time
                 est_comm_time = max_profiled_cnt * max_comm_time + rest_comm_time
             else:    
                 # When comm amount is extremely large, comm time scales a little faster than linearly scaling 
                 # probably due to network interference.
                 est_comm_time = (max_profiled_cnt * max_comm_time + rest_comm_time) \
-                                * pow(LARGE_COMM_SCALE_FACTOR, max_profiled_cnt)
+                                * pow(self.LARGE_COMM_SCALE_FACTOR, max_profiled_cnt)
             
             print(f"[WARN] Communication size of '{op_type}' excceeds the maximum profiled size. Linear scaling is applied.")
             print(f"       - Communication size of the operator: {comm_size} | Estimated comm time: {est_comm_time}")
@@ -366,7 +366,8 @@ class CriusDistProfiler:
             # Accumulate latency
             assert node.stage_index is not None, "Forward node stage index is not set."
             if node.latency is not None and node.stage_index is not None:
-                stage_latencies[node.stage_index][0] += node.latency
+                if node.stage_index < len(stage_latencies):
+                    stage_latencies[node.stage_index][0] += node.latency
         
         if global_configs.only_forward:
             return stage_latencies
@@ -389,7 +390,8 @@ class CriusDistProfiler:
                     grad_sync_latencies[node.stage_index] += node.latency
                 else:
                     # Normal backward nodes
-                    stage_latencies[node.stage_index][1] += node.latency
+                    if node.stage_index < len(stage_latencies):
+                        stage_latencies[node.stage_index][1] += node.latency
 
         return stage_latencies, grad_sync_latencies
 

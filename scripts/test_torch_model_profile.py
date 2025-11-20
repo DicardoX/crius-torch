@@ -637,6 +637,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 return MegatronToyModel(hidden_size, num_layers, device, dtype=dtype, megatron_config=megatron_config)
             else:
                 return GPTModel(megatron_config, vocab_size, max_seq_len, device=device, pre_process=_pre_process, post_process=_post_process)
+                # return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         class DummyDataset(Dataset):
             def __init__(self, num_samples=100, seq_len=128, vocab_size=1000):
@@ -655,15 +656,15 @@ class TorchModelProfileTest(unittest.TestCase):
                     'labels': torch.randint(0, self.vocab_size, (self.seq_len,)),
                 }
 
-        global_bs = 4
-        seq_len = 128
-        num_micro_batches = 4
-        hidden_size = 256
-        num_layers = 1
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 2
+        hidden_size = 4096
+        num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
         device = "cuda"
-        vocab_size = 10000
+        vocab_size = 50000
         use_toy = False
         
         global_configs.training_backend = "megatron"
@@ -686,6 +687,7 @@ class TorchModelProfileTest(unittest.TestCase):
         #     'L__self___layer_norm': 3,
         # }
         # layer_to_stage_mapping = [[0, 1, 2, 3]]
+        
         op_to_layer_mapping, layer_to_stage_mapping = None, None
         pipeline_stage_partition_method = "uniform"
         # pipeline_num_preprocess_nodes = 1
@@ -738,7 +740,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "parallelism": 'tp',
             },
         }
-
+        
         # Init distributed
         initialize_distributed(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
@@ -782,8 +784,8 @@ class TorchModelProfileTest(unittest.TestCase):
                 "dtype": dtype,
                 "megatron_config": megatron_config,
                 "use_toy": use_toy,
-                "_pre_process": False,
-                "_post_process": False
+                # "_pre_process": False,
+                # "_post_process": False
             },
             device_str=device,
             # fake_device_str=device,
@@ -831,24 +833,279 @@ class TorchModelProfileTest(unittest.TestCase):
         exit(0)
 
         ################# Real profiling #################
-        if not parallel_state.model_parallel_is_initialized():
-            try: 
-                parallel_state.initialize_model_parallel(
-                    tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
-                    pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
-                )
-            except:
-                print("Failed to set [parallel_state].")
+        # if not parallel_state.model_parallel_is_initialized():
+        #     try: 
+        #         parallel_state.initialize_model_parallel(
+        #             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+        #             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        #         )
+        #     except:
+        #         print("Failed to set [parallel_state].")
+
+        # rank = dist.get_rank()
+
+        # pipeline_rank = parallel_state.get_pipeline_model_parallel_rank()
+        # is_first = parallel_state.is_pipeline_first_stage()
+        # # is_first = False
+        # is_last = parallel_state.is_pipeline_last_stage()
+
+        # print(f"[Rank {rank}] Pipeline rank: {pipeline_rank}, "
+        #       f"First: {is_first}, Last: {is_last}")
+
+        # _model_loader_class = ModelLoader
+        # model_loader = _model_loader_class(
+        #     model_provider=model_provider,
+        #     model_kwargs={
+        #         "hidden_size": hidden_size,
+        #         "num_layers": num_layers,
+        #         "max_seq_len": seq_len,
+        #         "vocab_size": vocab_size,
+        #         "device": device,
+        #         "dtype": dtype,
+        #         "megatron_config": megatron_config,
+        #         "use_toy": use_toy,
+        #         "_pre_process": is_first,
+        #         "_post_process": is_last
+        #     },
+        #     device_str=device,
+        # )
+        # model = model_loader.load()
+
+        # # Inputs
+        # def generate_inputs(batch_size, seq_len, hidden_size, dtype, device):
+        #     # input_ = torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=torch.float16, device=device)     
+        #     input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device=device)
+        #     position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
+        #     attention_mask = torch.ones(batch_size, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+        #     return {
+        #         # 'input_': input_,
+        #         'input_ids': input_ids,
+        #         'position_ids': position_ids,
+        #         'attention_mask': attention_mask
+        #     }
+
+        # data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, torch.long, device) 
+        #         for _ in range(num_micro_batches)]
+
+        # measured_e2e_latency = 0.0
+
+        # if global_configs.pipeline_model_parallel_size <= 1:
+            
+        #     # Warmup
+        #     for _ in range(100):
+        #         with torch.no_grad():
+        #             # _ = model(**data[0])
+        #             _ = model(*input_args, **input_kwargs)
+        #     torch.cuda.synchronize(device)
+        
+        #     start_event = torch.cuda.Event(enable_timing=True)
+        #     end_event = torch.cuda.Event(enable_timing=True)  
+
+        #     # Measure
+        #     start_event.record()
+        #     for _ in range(1000):
+        #         with torch.no_grad():
+        #             # _ = model(**data[0])
+        #             _ = model(*input_args, **input_kwargs)
+        #     end_event.record()
+
+        #     end_event.synchronize()
+        #     total_time_ms = start_event.elapsed_time(end_event)
+        #     avg_latency_ms = total_time_ms / 1000     
+        #     stage_latencies_ms = [avg_latency_ms]
+        #     measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        # else:   
+            
+        #     # def register_debug_hooks(model):
+    
+        #     #     def hook_fn(module, input, output, layer_name):
+        #     #         print(f"\n=== {layer_name} ===")
+        #     #         print(f"Module type: {type(module).__name__}")
+        #     #         print(f"Input shapes: {[inp.shape if hasattr(inp, 'shape') else str(type(inp)) for inp in input]}")
+        #     #         print(f"Output shape: {output.shape if hasattr(output, 'shape') else str(type(output))}")
+                    
+        #     #         # 如果是特定模块，打印更多信息
+        #     #         if hasattr(module, 'weight'):
+        #     #             print(f"Weight shape: {module.weight.shape}")
+        #     #         if hasattr(module, 'in_features'):
+        #     #             print(f"in_features: {module.in_features}, out_features: {module.out_features}")
+                
+        #     #     hooks = []
+        #     #     # 递归注册hook到所有子模块
+        #     #     for name, module in model.named_modules():
+        #     #         if name:  # 跳过根模块
+        #     #             hook = module.register_forward_hook(
+        #     #                 lambda m, i, o, name=name: hook_fn(m, i, o, name)
+        #     #             )
+        #     #             hooks.append(hook)
+                
+        #     #     return hooks
+
+        #     # if rank == 0:
+        #     #     hooks = register_debug_hooks(model.module)  # 去掉DistributedDataParallel包装
+            
+        #     # print(model.config)
+        #     if is_first:
+        #         print(model)
+        #         dataset = DummyDataset(num_samples=1000, seq_len=seq_len, vocab_size=vocab_size)
+        #         dataloader = DataLoader(
+        #             dataset, 
+        #             batch_size=num_micro_batches, 
+        #             # collate_fn=custom_collate_fn
+        #         )
+                
+        #         def gpu_data_iterator():
+        #             for batch in dataloader:
+        #                 # print(len(batch.items()))
+        #                 yield {k: v.cuda() for k, v in batch.items()}
+                
+        #         data_iterator = gpu_data_iterator()
+        #     else:
+        #         data_iterator = None
+
+        #     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+            
+        #     # Warmup
+        #     print(f"[Global Rank {rank}] Starting warmup...")
+        #     for _ in range(100):
+        #         losses = model.module.pipeline_forward_backward(
+        #             data_iterator=data_iterator,
+        #             optimizer=optimizer,
+        #             num_microbatches=num_micro_batches,
+        #             seq_len=seq_len, 
+        #             forward_only=False
+        #         )
+        #     # torch.cuda.synchronize(device)
+        #     dist.barrier()
+            
+        #     print(f"[Global Rank {rank}] Starting measurement...")
+        #     start_event = torch.cuda.Event(enable_timing=True)
+        #     end_event = torch.cuda.Event(enable_timing=True)  
+            
+        #     start_event.record()
+        #     for _ in range(100):
+        #         losses = model.module.pipeline_forward_backward(
+        #             data_iterator=data_iterator,
+        #             optimizer=optimizer,
+        #             num_microbatches=num_micro_batches,
+        #             seq_len=seq_len, 
+        #             forward_only=False
+        #         )
+        #     end_event.record()    
+            
+        #     end_event.synchronize()
+        #     total_time_ms = start_event.elapsed_time(end_event)
+        #     avg_latency_ms = total_time_ms / 100
+        #     stage_latencies_ms = [avg_latency_ms]
+        #     measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
+        
+        # print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
+
+    @unittest.skip("Pass.")
+    def test_meagtron_ground_truth(self):
+
+
+        """ Run the parallelized Megatron model as the ground truth. """
+        # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.transformer.transformer_config import TransformerConfig
+        from megatron.core.transformer.module import MegatronModule
+        from megatron.core import mpu
+        # from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
+        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+
+        from crius.train_backend.megatron.utils import initialize_distributed
+        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+        from crius.train_backend.megatron.transformer_layer import TransformerLayer
+        from crius.train_backend.megatron.gpt_model import GPTModel
+
+        class DummyDataset(Dataset):
+            def __init__(self, num_samples=100, seq_len=128, vocab_size=1000):
+                self.num_samples = num_samples
+                self.seq_len = seq_len
+                self.vocab_size = vocab_size
+            
+            def __len__(self):
+                return self.num_samples
+            
+            def __getitem__(self, idx):
+                return {
+                    'input_ids': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                    'position_ids': torch.arange(self.seq_len),
+                    'attention_mask': torch.tril(torch.ones(1, self.seq_len, self.seq_len)).bool(),  # 因果mask，布尔类型
+                    'labels': torch.randint(0, self.vocab_size, (self.seq_len,)),
+                }
+        
+        def model_provider(
+            hidden_size: int, 
+            num_layers: int, 
+            max_seq_len: int, 
+            vocab_size: int, 
+            device: str, 
+            dtype: str, 
+            megatron_config: Any = None, 
+            # use_toy: bool = False,
+            # _pre_process: bool = False, 
+            # _post_process: bool = False
+        ) -> nn.Module:
+            """ Model provider function. """
+            return GPTModel(
+                megatron_config, vocab_size, max_seq_len, device=device, 
+                # pre_process=_pre_process, post_process=_post_process
+            )
+
+        global_bs = 8
+        seq_len = 2048
+        num_micro_batches = 2
+        hidden_size = 4096
+        num_layers = 4
+        data_dtype = torch.long
+        dtype = torch.float16
+        device = "cuda"
+        vocab_size = 50000
+
+
+        global_configs.training_backend = "megatron"
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 2
+        global_configs.only_forward = False
+        global_configs.enable_backward_graph_generation = True
+
+
+        # Init distributed
+        initialize_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        )
+        model_parallel_cuda_manual_seed(1234)
+
+
+        # Create TransformerConfig for Megatron
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=max(1, global_configs.tensor_model_parallel_size),
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
+            fp16=True,
+        )
+
 
         rank = dist.get_rank()
+        is_first = False
+        is_last = False
 
-        pipeline_rank = parallel_state.get_pipeline_model_parallel_rank()
-        is_first = parallel_state.is_pipeline_first_stage()
-        is_last = parallel_state.is_pipeline_last_stage()
+        if global_configs.pipeline_model_parallel_size > 1:
+            pipeline_rank = parallel_state.get_pipeline_model_parallel_rank()
+            is_first = parallel_state.is_pipeline_first_stage()
+            is_last = parallel_state.is_pipeline_last_stage()
 
-        print(f"[Rank {rank}] Pipeline rank: {pipeline_rank}, "
-              f"First: {is_first}, Last: {is_last}")
+            print(f"[Rank {rank}] Pipeline rank: {pipeline_rank}, "
+                  f"First: {is_first}, Last: {is_last}")
 
+        # Model
         _model_loader_class = ModelLoader
         model_loader = _model_loader_class(
             model_provider=model_provider,
@@ -860,86 +1117,104 @@ class TorchModelProfileTest(unittest.TestCase):
                 "device": device,
                 "dtype": dtype,
                 "megatron_config": megatron_config,
-                "use_toy": use_toy,
-                "_pre_process": is_first,
-                "_post_process": is_last
+                # "_pre_process": is_first,
+                # "_post_process": is_last
             },
             device_str=device,
         )
+
+
         model = model_loader.load()
 
-        # Inputs
-        def generate_inputs(batch_size, seq_len, hidden_size, dtype, device):
-            # input_ = torch.randn(global_bs // num_micro_batches, seq_len, hidden_size, dtype=torch.float16, device=device)     
-            input_ids = torch.randint(low=0, high=vocab_size, size=(batch_size, seq_len), device=device)
-            position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0).expand(batch_size, -1)
-            attention_mask = torch.ones(batch_size, 1, seq_len, seq_len, dtype=torch.bool, device=device)
-            return {
-                # 'input_': input_,
-                'input_ids': input_ids,
-                'position_ids': position_ids,
-                'attention_mask': attention_mask
-            }
 
-        data = [generate_inputs(global_bs // num_micro_batches, seq_len, hidden_size, torch.long, device) 
-                for _ in range(num_micro_batches)]
+        if not parallel_state.model_parallel_is_initialized():
+            try: 
+                parallel_state.initialize_model_parallel(
+                    tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+                    pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+                )
+            except:
+                print("Failed to set parallel_state.")
 
-        measured_e2e_latency = 0.0
+
+        
 
         if global_configs.pipeline_model_parallel_size <= 1:
-            
+
+            def register_debug_hooks(model):
+    
+                def hook_fn(module, input, output, layer_name):
+                    print(f"\n=== {layer_name} ===")
+                    print(f"Module type: {type(module).__name__}")
+                    print(f"Input shapes: {[inp.shape if hasattr(inp, 'shape') else str(type(inp)) for inp in input]}")
+                    print(f"Output shape: {output.shape if hasattr(output, 'shape') else str(type(output))}")
+                    
+                    # 如果是特定模块，打印更多信息
+                    if hasattr(module, 'weight'):
+                        print(f"Weight shape: {module.weight.shape}")
+                    if hasattr(module, 'in_features'):
+                        print(f"in_features: {module.in_features}, out_features: {module.out_features}")
+                
+                hooks = []
+                # 递归注册hook到所有子模块
+                for name, module in model.named_modules():
+                    if name:  # 跳过根模块
+                        hook = module.register_forward_hook(
+                            lambda m, i, o, name=name: hook_fn(m, i, o, name)
+                        )
+                        hooks.append(hook)
+                
+                return hooks
+
+            if rank == 0:
+                hooks = register_debug_hooks(model.module)  # 去掉DistributedDataParallel包装
+
+
+            # Inputs
+            input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+            position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+            attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+            decoder_input = None
+            labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+            input_args = ()
+            input_kwargs = {
+                "input_ids": input_ids,
+                "position_ids": position_ids,
+                "attention_mask": attention_mask,
+                "decoder_input": decoder_input,
+                "labels": labels,
+            }
+
             # Warmup
-            for _ in range(100):
+            for _ in range(5):
                 with torch.no_grad():
-                    _ = model(**data[0])
+                    _ = model(*input_args, **input_kwargs)
+
+
+                # exit(0)
+
             torch.cuda.synchronize(device)
-        
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)  
 
+
             # Measure
             start_event.record()
-            for _ in range(1000):
+
+            for _ in range(10):
                 with torch.no_grad():
-                    _ = model(**data[0])
+                    _ = model(*input_args, **input_kwargs)
+
+
             end_event.record()
 
             end_event.synchronize()
+
             total_time_ms = start_event.elapsed_time(end_event)
-            avg_latency_ms = total_time_ms / 1000     
+            avg_latency_ms = total_time_ms / 10    
             stage_latencies_ms = [avg_latency_ms]
             measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
-        else:   
-            
-            # def register_debug_hooks(model):
-    
-            #     def hook_fn(module, input, output, layer_name):
-            #         print(f"\n=== {layer_name} ===")
-            #         print(f"Module type: {type(module).__name__}")
-            #         print(f"Input shapes: {[inp.shape if hasattr(inp, 'shape') else str(type(inp)) for inp in input]}")
-            #         print(f"Output shape: {output.shape if hasattr(output, 'shape') else str(type(output))}")
-                    
-            #         # 如果是特定模块，打印更多信息
-            #         if hasattr(module, 'weight'):
-            #             print(f"Weight shape: {module.weight.shape}")
-            #         if hasattr(module, 'in_features'):
-            #             print(f"in_features: {module.in_features}, out_features: {module.out_features}")
-                
-            #     hooks = []
-            #     # 递归注册hook到所有子模块
-            #     for name, module in model.named_modules():
-            #         if name:  # 跳过根模块
-            #             hook = module.register_forward_hook(
-            #                 lambda m, i, o, name=name: hook_fn(m, i, o, name)
-            #             )
-            #             hooks.append(hook)
-                
-            #     return hooks
-
-            # if rank == 0:
-                # hooks = register_debug_hooks(model.module)  # 去掉DistributedDataParallel包装
-            
-            # print(model.config)
+        else:
             if is_first:
                 dataset = DummyDataset(num_samples=1000, seq_len=seq_len, vocab_size=vocab_size)
                 dataloader = DataLoader(
@@ -992,7 +1267,7 @@ class TorchModelProfileTest(unittest.TestCase):
             avg_latency_ms = total_time_ms / 100
             stage_latencies_ms = [avg_latency_ms]
             measured_e2e_latency =np.max(stage_latencies_ms) * (num_micro_batches - 1) + np.sum(stage_latencies_ms)
-        
+
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
     @unittest.skip("Pass.")
@@ -1025,7 +1300,7 @@ class TorchModelProfileTest(unittest.TestCase):
         num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
-        device = "cpu"
+        device = "cuda"
         vocab_size = 50000
         
         global_configs.tensor_model_parallel_size = 1

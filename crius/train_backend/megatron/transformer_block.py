@@ -18,6 +18,8 @@ from crius.train_backend.megatron.transformer_layer import TransformerLayer
 from crius.train_backend.megatron.utils import WrappedTensor
 from crius.global_envs import global_configs
 
+import torch.distributed as dist
+
 __all__ = [ "TransformerBlock", ]
 
 
@@ -137,7 +139,13 @@ class TransformerBlock(MegatronModule):
         #   is called here to be future-proof and corner-case-proof.
         # print(f"hidden_states before make_viewless_tensor: {hidden_states}")
         # print(f"hidden_states type: {type(hidden_states)}")
-        # print(f"hidden_states is None: {hidden_states is None}")
+
+        # print(f"[rank{dist.get_rank()}]attention_mask.shape: {attention_mask.shape}")
+
+        # if len(attention_mask.shape) < 4:
+        #     attention_mask = attention_mask.unsqueeze(1)
+
+        # print(f"[rank{dist.get_rank()}]   attention_mask:{attention_mask}")
 
         hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
 
