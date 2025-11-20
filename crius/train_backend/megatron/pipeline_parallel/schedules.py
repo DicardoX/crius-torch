@@ -52,29 +52,16 @@ def forward_step(
         else:
             raise RuntimeError("First pipeline stage requires data_iterator")
     else:
-        # 中间和最后阶段创建占位符数据
-        if input_tensor is not None:
-            batch_size = input_tensor.size(1)
-            seq_len = input_tensor.size(0)
-            device = input_tensor.device
-        else:
-            batch_size = 1
-            seq_len = 1
-            device = torch.cuda.current_device()
-        
-        data = {
-            'input_ids': torch.zeros((batch_size, seq_len), dtype=torch.long, device=device),
-            'position_ids': torch.zeros((batch_size, seq_len), dtype=torch.long, device=device),
-            'attention_mask': torch.ones((batch_size, seq_len, seq_len), dtype=torch.bool, device=device),
-        }
-    
-    # 设置输入张量
+        data = None
+
     if input_tensor is not None:
         model.set_input_tensor(input_tensor)
     
-    # 前向传播
     with torch.set_grad_enabled(not forward_only):
-        output_tensor = model(**data)
+        if data is not None:
+            output_tensor = model(**data)
+        else:
+            output_tensor = model()
     
     return output_tensor, None
 

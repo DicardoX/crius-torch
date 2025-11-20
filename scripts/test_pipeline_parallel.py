@@ -8,7 +8,7 @@
     python test_pipeline_parallel.py
     
     # 多GPU测试（流水线并行）
-    torchrun --nproc-per-node=4 test_pipeline_parallel.py
+    torchrun --nproc-per-node=2 test_pipeline_parallel.py
 """
 
 import os

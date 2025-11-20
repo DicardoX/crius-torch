@@ -5,3 +5,6 @@ from crius.train_backend.megatron.mlp import *
 from crius.train_backend.megatron.transformer_layer import *
 from crius.train_backend.megatron.transformer_block import *
 from crius.train_backend.megatron.gpt_model import *
+from crius.train_backend.megatron.llama_model import *
+from crius.train_backend.megatron.qwen_model import *
+from crius.train_backend.megatron.qwen_moe_model import *

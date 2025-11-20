@@ -86,11 +86,14 @@ class MLP(MegatronModule):
     def forward(self, hidden_states, per_token_scale=None):
         """ Forward method for compilation. """
 
-        # [s, b, 4 * h/p]
+        # [s, b, 4*h/p] or [s, b, 8*h/p] if gated
         intermediate_parallel, bias_parallel = self.linear_fc1(hidden_states)        
 
-        # NOTE: Naive activation function for compilation.
-        intermediate_parallel = self.activation_func(intermediate_parallel)
+        if self.config.gated_linear_unit:
+            gate, value = torch.chunk(intermediate_parallel, 2, dim=-1)
+            intermediate_parallel = self.activation_func(gate) * value
+        else:
+            intermediate_parallel = self.activation_func(intermediate_parallel)
 
         if per_token_scale is not None:
             original_dtype = intermediate_parallel.dtype
