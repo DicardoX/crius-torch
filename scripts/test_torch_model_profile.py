@@ -400,6 +400,8 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.transformer_layer import TransformerLayer
         from crius.train_backend.megatron.gpt_model import GPTModel
         from crius.train_backend.megatron.training.trainer import Trainer, ModelType
+        from crius.train_backend.megatron.training.utils import (get_train_data_iterator, 
+                                                                 get_optimizer_and_scheduler)
 
         def model_provider(
             hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
@@ -446,8 +448,8 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_dtype=dtype,
             fp16=(dtype == torch.float16),
         )
-        # We monkey patch all input configuratons into `megatron_config` instead of 
-        # explicitly pass-in into the arguments of `Trainer()`.
+        # NOTE: We monkey patch all input configuratons into `megatron_config`, 
+        # instead of explicitly pass-in into the arguments of `Trainer()`.
         setattr(megatron_config, "dtype", dtype)
 
         # Model
@@ -463,19 +465,22 @@ class TorchModelProfileTest(unittest.TestCase):
         model = model_provider(**model_kwargs) if model_provider else None
 
         # Inputs
-        input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
-        attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
-        decoder_input = None
-        labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        input_args = ()
-        input_kwargs = {
-            "input_ids": input_ids,
-            "position_ids": position_ids,
-            "attention_mask": attention_mask,
-            "decoder_input": decoder_input,
-            "labels": labels,
-        }
+        # input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        # position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+        # attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
+        # decoder_input = None
+        # labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
+        # input_args = ()
+        # input_kwargs = {
+        #     "input_ids": input_ids,
+        #     "position_ids": position_ids,
+        #     "attention_mask": attention_mask,
+        #     "decoder_input": decoder_input,
+        #     "labels": labels,
+        # }
+
+        train_data_iterator = get_train_data_iterator()
+        (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler()
 
         # Trainer
         trainer = Trainer(
@@ -483,9 +488,9 @@ class TorchModelProfileTest(unittest.TestCase):
             forward_step_func=None,
             model=model,
             model_type=model_type,
-            train_data_iterator=None,
-            optimizer=None,
-            opt_param_scheduler=None,
+            train_data_iterator=train_data_iterator,
+            optimizer=optimizer,
+            opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
         )
