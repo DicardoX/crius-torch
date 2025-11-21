@@ -400,7 +400,7 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.transformer_layer import TransformerLayer
         from crius.train_backend.megatron.gpt_model import GPTModel
         from crius.train_backend.megatron.training.trainer import Trainer, ModelType
-        from crius.train_backend.megatron.training.utils import (get_train_data_iterator, 
+        from crius.train_backend.megatron.training.utils import (setup_model, get_train_data_iterator, 
                                                                  get_optimizer_and_scheduler)
 
         def model_provider(
@@ -423,6 +423,7 @@ class TorchModelProfileTest(unittest.TestCase):
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
+        num_iters = 10
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
@@ -463,6 +464,7 @@ class TorchModelProfileTest(unittest.TestCase):
             "megatron_config": megatron_config,
         }
         model = model_provider(**model_kwargs) if model_provider else None
+        model = setup_model(model)
 
         # Inputs
         # input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
@@ -479,8 +481,12 @@ class TorchModelProfileTest(unittest.TestCase):
         #     "labels": labels,
         # }
 
-        train_data_iterator = get_train_data_iterator()
-        (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler()
+        train_data_iterator = get_train_data_iterator(
+            vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
+        )
+        (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler(
+            model, fp16=(dtype == torch.float16), params_dtype=dtype, 
+        )
 
         # Trainer
         trainer = Trainer(

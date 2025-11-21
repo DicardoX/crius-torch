@@ -88,56 +88,7 @@ class Trainer:
         self.forward_step_func = forward_step_func
         self.forward_backward_func = None
 
-        self._setup_model()
         self._init_forward_backward_func()
-
-    def _setup_model(self, wrap_with_ddp=True):
-        """ Prepare model setups. """
-        if not isinstance(self.model, list):
-            self.model = [self.model]
-
-        # Set tensor model parallel attributes if not set.
-        # Only parameters that are already tensor model parallel have these
-        # attributes set for them. We should make sure the default attributes
-        # are set for all params so the optimizer can use them.
-        for model_module in self.model:
-            for param in model_module.parameters():
-                tensor_parallel.set_defaults_if_not_set_tensor_model_parallel_attributes(param)
-        
-        # GPU allocation
-        for model_module in self.model:
-            model_module.cuda(torch.cuda.current_device())
-
-        # FP16 conversion
-        if getattr(self.megatron_config, "dtype", torch.float16) == torch.float16:
-            self.model = [Float16Module(self.megatron_config, model_module) for model_module in self.model]
-            # Empty CUDA cache released by FP16 conversion
-            torch.cuda.empty_cache()
-
-        if wrap_with_ddp:
-            ddp_config = DistributedDataParallelConfig(
-                grad_reduce_in_fp32=getattr(self.megatron_config, "grad_reduce_in_fp32", False),
-                overlap_grad_reduce=getattr(self.megatron_config, "overlap_grad_reduce", False),
-                use_distributed_optimizer=getattr(self.megatron_config, "use_distributed_optimizer", False),
-                check_for_nan_in_grad=getattr(self.megatron_config, "check_for_nan_in_grad", False),
-            )
-            # Wrap model
-            self.model = [
-                DistributedDataParallel(
-                    config=self.megatron_config,
-                    ddp_config=ddp_config,
-                    module=_model_chunk,
-                    # data_parallel_group=parallel_state.get_data_parallel_group(with_context_parallel=True),
-                    # expert_data_parallel_group=parallel_state.get_data_modulo_expert_parallel_group(),
-                    # Turn off bucketing for model_chunk 2 onwards, since communication for these
-                    # model chunks is overlapped with compute anyway.
-                    disable_bucketing=(_chunk_idx > 0)
-                ) for (_chunk_idx, _model_chunk) in enumerate(self.model)
-            ]
-            # Broadcast params from data parallel src rank to other data parallel ranks
-            if getattr(self.megatron_config, "data_parallel_random_init", False):
-                for model_chunk in self.model:
-                    model_chunk.broadcast_params()
 
     def _init_forward_backward_func(self) -> None:
         """ Initialize forward-backward pipeline function. """
