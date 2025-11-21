@@ -387,13 +387,16 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
+        import os
+        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
         # from megatron.core.model_parallel_config import ModelParallelConfig
         from megatron.core.transformer.transformer_config import TransformerConfig
         from megatron.core import mpu, tensor_parallel
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
         from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
         from megatron.core.transformer.module import Float16Module
-        from megatron.core.utils import get_model_config
+        from megatron.core.utils import get_model_config, get_attr_wrapped_model
 
         from crius.train_backend.megatron.utils import initialize_distributed
         from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
@@ -401,7 +404,7 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.gpt_model import GPTModel
         from crius.train_backend.megatron.training.trainer import Trainer, ModelType
         from crius.train_backend.megatron.training.utils import (setup_model, get_train_data_iterator, 
-                                                                 get_optimizer_and_scheduler)
+                                                                 get_optimizer_and_scheduler, get_input_batch)
 
         def model_provider(
             hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
@@ -419,15 +422,14 @@ class TorchModelProfileTest(unittest.TestCase):
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
-        data_dtype = torch.long
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
@@ -451,6 +453,10 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         # NOTE: We monkey patch all input configuratons into `megatron_config`, 
         # instead of explicitly pass-in into the arguments of `Trainer()`.
+        setattr(megatron_config, "global_batch_size", global_bs)
+        setattr(megatron_config, "num_micro_batches", num_micro_batches)
+        setattr(megatron_config, "sequence_length", seq_len)
+        setattr(megatron_config, "num_iters", num_iters)
         setattr(megatron_config, "dtype", dtype)
 
         # Model
@@ -466,32 +472,46 @@ class TorchModelProfileTest(unittest.TestCase):
         model = model_provider(**model_kwargs) if model_provider else None
         model = setup_model(model)
 
-        # Inputs
-        # input_ids = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        # position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
-        # attention_mask = torch.ones(global_bs // num_micro_batches, 1, seq_len, seq_len, dtype=torch.bool, device=device)
-        # decoder_input = None
-        # labels = torch.ones(global_bs // num_micro_batches, seq_len, dtype=data_dtype, device=device)
-        # input_args = ()
-        # input_kwargs = {
-        #     "input_ids": input_ids,
-        #     "position_ids": position_ids,
-        #     "attention_mask": attention_mask,
-        #     "decoder_input": decoder_input,
-        #     "labels": labels,
-        # }
-
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
         )
         (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler(
-            model, fp16=(dtype == torch.float16), params_dtype=dtype, 
+            model, global_bs, num_iters, fp16=(dtype == torch.float16), params_dtype=dtype, 
         )
+
+        # Definition of forward step function
+        def __forward_step_func(data_iterator, model):
+            """ Vanilla forward step function. """
+   
+            def __loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
+                """ Loss function definition. """
+                losses = output_tensor.float()
+                loss_mask = loss_mask.view(-1).float()
+                loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+                # If you have data parallel reduce loss across data parallel groups.
+                # If pipeline parallel, loss computation is done only in last stage.
+                return loss, {"lm loss": loss}
+
+            megatron_config = get_attr_wrapped_model(model, attr="config")
+            # Input batch
+            (tokens, labels, loss_mask, 
+             attention_mask, position_ids) = get_input_batch(
+                 data_iterator=data_iterator,
+                 micro_batch_size=(
+                     megatron_config.global_batch_size // megatron_config.num_micro_batches
+                 ),
+                 seq_len=megatron_config.sequence_length,
+                 pipeline_model_parallel_size=megatron_config.pipeline_model_parallel_size,
+            )
+            # Forward
+            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+
+            return output_tensor,  partial(__loss_func, loss_mask)
 
         # Trainer
         trainer = Trainer(
             megatron_transformer_config=megatron_config,
-            forward_step_func=None,
+            forward_step_func=__forward_step_func,
             model=model,
             model_type=model_type,
             train_data_iterator=train_data_iterator,
