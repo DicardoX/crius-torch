@@ -14,8 +14,55 @@ from crius.compile.graph.graph import IRGraph
 from crius.global_envs import global_configs, dtype_to_bytes
 
 __all__ = [
+    "estimate_per_op_fwd_flops",
+    "estimate_per_op_fwd_memory_access_gb",
     "estimate_model_memory_access_gb",
 ]
+
+
+def estimate_per_op_fwd_memory_access_gb(proto_plan: ParallelismPlan, graph: IRGraph) -> None:
+    """ Estimate per-operator memory access of the model, including weight and activation as they are 
+    involved in forward pass. """
+
+    for node in graph.nodes:
+        node.memory_access = 0.0
+        # Weight
+        weight_shape = None
+        if node.layer_type == "gemm":
+            weight_shape = [node.input_shapes[0][-1], node.output_shapes[0][-1]]
+            node.memory_access += float(
+                (np.prod(weight_shape) * dtype_to_bytes.get(node.dtype, 4))
+            ) / (1024 ** 3)   # GB
+        
+        # Activation
+        # FIXME(chunyu): Incomplete activation memory estimation, should consider more layer types.
+        if node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", ):
+            for out_shape in node.output_shapes:
+                node.memory_access += float(
+                    (np.prod(list(out_shape)) * dtype_to_bytes.get(proto_plan.comm_data_type, 4))
+                ) / (1024 ** 3)   # GB
+
+
+def estimate_per_op_fwd_flops(graph: IRGraph) -> None:
+    """ Estimate per-operator FLOPs of the model in forward pass. """
+    for node in graph.nodes:
+        node.flops = 0.0
+
+        if node.layer_type == "gemm":
+            # Shape: [b, s, h1] x [h1, h2]
+            (b, s, h1) = node.input_shapes[0]
+            h2 = node.input_shapes[1][-1]
+            node.flops = (b * s * h2) * (2 * h1 - 1)
+            
+        elif node.layer_type == "bmm":
+            # Shape: [b, s, s] x [b, s, h1] 
+            (b, s, h1) = node.input_shapes[1]
+            node.flops = 2 * b * s * s * h1
+
+        elif node.layer_type == "baddbmm":
+            # Shape: [b, s, s] + [b, s, h1] x [b, h1, s]
+            (b, s, h1) = node.input_shapes[1]
+            node.flops = 2 * b * s * s * h1 + b * s * s
 
 
 def estimate_model_memory_access_gb(

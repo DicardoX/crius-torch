@@ -75,7 +75,8 @@ class ParallelTuneTest(unittest.TestCase):
             global_configs.use_shadow_model_loader = True
 
         # Prototype of parallelism plan
-        pipeline_stage_partition_method = "uniform"
+        pipeline_stage_partition_method = "auto"
+        # pipeline_stage_partition_method = "uniform"
         pipeline_use_boundary_markers = True
         pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
         pipeline_boundary_end_marker = ['dropout', 'add', ]

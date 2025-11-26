@@ -10,7 +10,8 @@ import torch
 from torch import nn
 
 from crius.core.grid_planner.grid import Grid
-from crius.core.utils import estimate_model_memory_access_gb
+from crius.core.utils import (estimate_per_op_fwd_memory_access_gb, estimate_per_op_fwd_flops, 
+                              estimate_model_memory_access_gb)
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (postcompile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
@@ -45,10 +46,7 @@ class CriusParallelPlanner:
         """ Force all degrees to be power-of-2. """
 
     def generate_pareto_optimal_plans(self, grid: Grid, precompiled_graph: IRGraph) -> List[ParallelismPlan]:
-        """ Generate Pareto-optimal set of parallelism plans in this grid. 
-        
-        TODO(chunyu): This CPU-only process can be accelerated via multi-thread.
-        """
+        """ Generate Pareto-optimal set of parallelism plans in this grid. """
 
         # Enumerate parallelism plans
         plans = self._enumerate_candidate_parallelism_plans(grid)
@@ -61,8 +59,9 @@ class CriusParallelPlanner:
             if self.pipeline_stage_partition_method == "uniform": 
                 pass    # No information needed
             elif self.pipeline_stage_partition_method == "auto":
-                # self._get_model_operator_information(graph, bw_graph)
-                self._assign_per_layer_gpu_quota()
+                # Get operator infos
+                estimate_per_op_fwd_flops(graph)
+                estimate_per_op_fwd_memory_access_gb(self._proto_plan, graph)
             else:
                 raise ValueError(f"Invalid pipeline stage partition method: {self.pipeline_stage_partition_method}")
 
@@ -71,15 +70,8 @@ class CriusParallelPlanner:
             plan.graph = graph
             plan.bw_graph = bw_graph
 
-        # for node in grid.pareto_optimal_plans[0].graph.nodes:
-        #     print(node.target, node.stage_index)
-        # print(grid.pareto_optimal_plans)
-        # print("\n\n\n\n\n\n\n\n\n")
-
         # Enumerate and formulate a Pareto-optimal plan set
         return self._formulate_pareto_optimal_plan_set(plans)
-        
-        # exit(0)
 
     def _enumerate_candidate_parallelism_plans(self, grid: Grid):
         """ Enumerate plans (`ParallelismPlan`). """
@@ -113,15 +105,6 @@ class CriusParallelPlanner:
                 raise ValueError(f"Currently only supports power-of-2 degree in plan enumeration.")
         
         return plans
-    
-    # def _get_model_operator_information(self, graph: IRGraph, bw_graph: Optional[IRGraph] = None) -> None:
-    #     """ Get operator information of the model such as FLOPs and memory access. """
-    #     for node in graph.nodes:
-    #         raise NotImplementedError
-
-    def _assign_per_layer_gpu_quota(self):
-        """ TODO(chunyu): Which granularity should we use to assign? Operator or transformer layer? """
-        raise NotImplementedError
     
     @classmethod
     def partition_pipeline_stages(
@@ -188,7 +171,8 @@ class CriusParallelPlanner:
                 return
         
         elif parallelism_plan.pipeline_stage_partition_method == "auto":
-            raise NotImplementedError
+            CriusParallelPlanner._partition_pipeline_stages_auto(graph, parallelism_plan)
+
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {parallelism_plan.pipeline_stage_partition_method}")
         
@@ -198,6 +182,14 @@ class CriusParallelPlanner:
             # bw_stage_index = 2 * parallelism_plan.pipeline_parallel_degree - node.fw_node.stage_index - 1
             setattr(node, "stage_index", node.fw_node.stage_index)
     
+    @classmethod
+    def _partition_pipeline_stages_auto(cls, graph: IRGraph, parallelism_plan: ParallelismPlan) -> None:
+        """ Partition pipeline stages based on inter-stage load (i.e., flops) balance. 
+        
+        Notably, currently the partitioning granularity is considered as transformer layer.
+        """
+        raise NotImplementedError
+
     def _formulate_pareto_optimal_plan_set(self, parallelism_plans: List[ParallelismPlan]) -> List[ParallelismPlan]:
         """ Formulate a set of Pareto-optimal parallelism plans. """
         
