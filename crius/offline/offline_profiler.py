@@ -14,6 +14,7 @@ import torch
 from torch import nn
 
 from crius.global_envs import logger
+from crius.offline.offline_recorder import OfflineDataRecorder
 
 __all__ = [
     "OfflineProfileConfigs",
@@ -52,6 +53,27 @@ class OfflineProfileConfigs:
     gemm_right_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the right operand in GEMM operations. """
 
+    # REDUCE_SUM
+    reduce_sum_op_type: Callable = torch.sum
+
+    reduce_sum_left_op_hidden_dims:  List[int] = None
+    """ Candidate hidden dimensions of the left operand in REDUCE_SUM operations. """
+
+    reduce_sum_right_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the right operand in REDUCE_SUM operations. """
+
+    # BMM
+    bmm_op_type: Callable = torch.bmm
+
+    bmm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in BMM operations. """
+    
+    #BADDBMM
+    baddbmm_op_type: Callable = torch.baddbmm
+
+    baddbmm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in BADDBMM operations. """
+
     # Communication
     allreduce_op_type: Callable = torch.distributed.all_reduce
 
@@ -81,9 +103,9 @@ class OfflineProfileConfigs:
     def __post_init__(self):
         # GEMM shapes
         if self.gemm_left_op_hidden_dims is None:
-            self.gemm_left_op_hidden_dims = [128, 256, 512, 1024]
+            self.gemm_left_op_hidden_dims = [128, 256, 512, 1024, 2048, 4096, 8192]
         if self.gemm_right_op_hidden_dims is None:
-            self.gemm_right_op_hidden_dims = [128, 256, 512, 1024]
+            self.gemm_right_op_hidden_dims = [128, 256, 512, 1024, 2048, 4096, 8192]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
@@ -112,15 +134,15 @@ class CriusOfflineDataManager:
     
         self.configs = profile_configs
 
-        self.to_store_path = to_store_path
-        self.filename = data_filename
-        self._path = os.path.join(self.to_store_path, self.filename)
-        if not os.path.exists(to_store_path):
-            os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
-            logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
+        # self.to_store_path = to_store_path
+        # self.filename = data_filename
+        # self._path = os.path.join(self.to_store_path, self.filename)
+        # if not os.path.exists(to_store_path):
+        #     os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
+        #     logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
         
-        self.data = None
-        self._load()
+        # self.data = None
+        # self._load()
     
     def profile_all_gemm(self) -> None:
         """ Profile all GEMM operators. """
@@ -149,105 +171,536 @@ class CriusOfflineDataManager:
         else:
             raise NotImplementedError()
         
-        def __benchmark_one_gemm_op(bs_, seq_len_, left_hidden_dim_, right_hidden_dim_):
-            left_op = torch.randn((bs_, seq_len_, left_hidden_dim_), dtype=dtype, device=device)
-            right_op = torch.randn((left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
-            result_op = torch.zeros((bs_, seq_len_, right_hidden_dim_), dtype=dtype, device=device)
+        def __benchmark_one_gemm_op(bs_, seq_len_, left_hidden_dim_, right_hidden_dim_, layout_):
+            if layout_ == "s:b:h1,h1:h2":
+                left_op   = torch.randn((bs_, seq_len_,    left_hidden_dim_),  dtype=dtype, device=device)
+                right_op  = torch.randn((left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, seq_len_,    right_hidden_dim_), dtype=dtype, device=device)
 
-            # Warmup
-            for _ in range(num_warmup_steps):
-                result_op = gemm_op_type(left_op, right_op)
-            torch.cuda.synchronize()
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
 
-            # Timer events
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
 
-            # Benchmark
-            start_event.record()
-            for _ in range(num_profile_steps):
-                result_op = gemm_op_type(left_op, right_op)
-            end_event.record()
-            torch.cuda.synchronize()
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
 
-            op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-            return op_latency_
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            elif layout_ == "b:s:h2,h2:h1":
+                left_op   = torch.randn((bs_, seq_len_,     right_hidden_dim_), dtype=dtype, device=device)
+                right_op  = torch.randn((right_hidden_dim_, left_hidden_dim_),  dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, seq_len_,     left_hidden_dim_),  dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            elif layout_ == "b:h1:s,b:s:h2":
+                left_op   = torch.randn((bs_, left_hidden_dim_, seq_len_),          dtype=dtype, device=device)
+                right_op  = torch.randn((bs_, seq_len_,         right_hidden_dim_), dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = gemm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            else:
+                raise NotImplementedError(f"Unsupport gemm layout: {layout_}")
 
         # Benchmark loop
+        recorder = OfflineDataRecorder()
+
         for bs in batch_sizes:
             for seq_len in seq_lens:
                 for left_hidden_dim in gemm_left_op_hidden_dims:
                     for right_hidden_dim in gemm_right_op_hidden_dims:
-                        query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        if query_key in self.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                            continue
-                        
-                        logger.info(f"==========> GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                    f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                        # """Just for a40 40GB memory"""
+                        # print(f"gemm:{(bs * seq_len * left_hidden_dim * right_hidden_dim - 1) // (1024*1024*1024) + 1} GB")
+                        # if (bs * seq_len * left_hidden_dim * right_hidden_dim - 1) // (1024*1024*1024) + 1 >= 10:
+                            # continue
+
+                        """LAYOUT_INPUT_GRAD_1"""
+                        # Generate query_key and check cache
+                        gemm_input_grad_layout = "s:b:h1,h1:h2"
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None, None)
+                        recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
+
                         # Reset
                         gc.collect()
                         torch.cuda.empty_cache()
                         torch.cuda.synchronize()
 
-                        op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        self._write_one_entry(query_key, op_latency, None)
-        
-        self._store()
-    
-    def profile_all_allreduce(self) -> None:
-        """ Profile all All-Reduce operators. """
+                        # Test and record
+                        op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
+                        recorder._write_one_entry(query_key, op_latency, None)
 
-        allreduce_op_type = self.configs.allreduce_op_type
-        comm_data_sizes = self.configs.comm_data_sizes
+                        
+                        """LAYOUT_INPUT_GRAD_2"""
+                        # Generate query_key and check cache
+                        gemm_input_grad_layout = "b:s:h2,h2:h1"
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout, None, None, None)
+                        recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
+
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        # Test and record
+                        op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_input_grad_layout)
+                        recorder._write_one_entry(query_key, op_latency, None)
+
+                        
+                        """LAYOUT-WEIGHT_GRAD"""
+                        # Generate query_key and check cache
+                        gemm_weight_grad_layout = "b:h1:s,b:s:h2"
+                        query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout, None, None, None)
+                        recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout)
+
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        # Test and record
+                        op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim, gemm_weight_grad_layout)
+                        recorder._write_one_entry(query_key, op_latency, None)
+        
+        recorder._store()
+    
+    def profile_all_reduce_sum(self) -> None:
+        """ Profile all REDUCE_SUM operators. """
+        
+        reduce_sum_op_type = self.configs.reduce_sum_op_type
+        reduce_sum_left_op_hidden_dims  = self.configs.reduce_sum_left_op_hidden_dims
+        reduce_sum_right_op_hidden_dims = self.configs.reduce_sum_right_op_hidden_dims
+        device = torch.device(self.configs.device)
         dtype = self.configs.dtype
         num_warmup_steps = self.configs.num_warmup_steps
         num_profile_steps = self.configs.num_profile_steps
 
+        if self.configs.batch_size_step == "power-of-2":
+            batch_sizes = [
+                2**i for i in range(int(self.configs.min_batch_size).bit_length() - 1, 
+                                    int(self.configs.max_batch_size).bit_length())
+            ]   
+        else:
+            raise NotImplementedError()
+        
+        # if self.configs.seq_len_step == "power-of-2":
+        #     seq_lens = [
+        #         2**i for i in range(int(self.configs.min_seq_len).bit_length() - 1, 
+        #                             int(self.configs.max_seq_len).bit_length())
+        #     ]
+        # else:
+        #     raise NotImplementedError()
+        
+        def __benchmark_one_reduce_sum_op(bs_, left_hidden_dim_, right_hidden_dim_, layout_):
+            if layout_ == "b:h1:h2":
+                dim_ = 0
+                reduce_sum_op = torch.randn((bs_, left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
+                result_op     = torch.zeros((     left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = reduce_sum_op_type(reduce_sum_op, dim=dim_)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = reduce_sum_op_type(reduce_sum_op, dim=dim_)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            else:
+                raise NotImplementedError(f"Unsupport reduce_sum layout: {layout_}")
+
+        # Benchmark loop
+        recorder = OfflineDataRecorder()
+
+        for bs in batch_sizes:
+            for left_hidden_dim in reduce_sum_left_op_hidden_dims:
+                for right_hidden_dim in reduce_sum_right_op_hidden_dims:
+                    # """Just for a40 40GB memory"""
+                    # if (bs *  left_hidden_dim * right_hidden_dim - 1) // (1024*1024*1024) + 1 >= 10:
+                    #     continue
+
+                    """LAYOUT_INPUT_GRAD"""
+                    # Generate query_key and check cache
+                    reduce_sum_layout = "b:h1:h2"
+                    query_key = OfflineDataRecorder.get_query_key("reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, reduce_sum_layout, None, None, None)
+                    recorder._check_cache(query_key, "REDUCE_SUM", bs, 0, left_hidden_dim, right_hidden_dim, reduce_sum_layout)
+
+                    # Reset
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                    # Test and record
+                    op_latency = __benchmark_one_reduce_sum_op(bs, left_hidden_dim, right_hidden_dim, reduce_sum_layout)
+                    recorder._write_one_entry(query_key, op_latency, None)
+                    
+        
+        recorder._store()
+
+    def profile_all_bmm(self) -> None:
+        """ Profile all BMM operators. """
+        
+        bmm_op_type = self.configs.bmm_op_type
+        bmm_op_hidden_dims = self.configs.bmm_op_hidden_dims
+        device = torch.device(self.configs.device)
+        dtype = self.configs.dtype
+        num_warmup_steps = self.configs.num_warmup_steps
+        num_profile_steps = self.configs.num_profile_steps
+
+        if self.configs.batch_size_step == "power-of-2":
+            batch_sizes = [
+                2**i for i in range(int(self.configs.min_batch_size).bit_length() - 1, 
+                                    int(self.configs.max_batch_size).bit_length())
+            ]   
+        else:
+            raise NotImplementedError()
+        
+        if self.configs.seq_len_step == "power-of-2":
+            seq_lens = [
+                2**i for i in range(int(self.configs.min_seq_len).bit_length() - 1, 
+                                    int(self.configs.max_seq_len).bit_length())
+            ]
+        else:
+            raise NotImplementedError()
+        
+        def __benchmark_one_bmm_op(bs_, seq_len_, hidden_dim_, layout_):
+            if layout_ == "b:s:h1,b:h1:s":
+                left_op   = torch.randn((bs_, seq_len_,    hidden_dim_), dtype=dtype, device=device)
+                right_op  = torch.randn((bs_, hidden_dim_, seq_len_   ), dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, seq_len_,    seq_len_   ), dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            elif layout_ == "b:s:s,b:s:h1":
+                left_op   = torch.randn((bs_, seq_len_, seq_len_),    dtype=dtype, device=device)
+                right_op  = torch.randn((bs_, seq_len_, hidden_dim_), dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, seq_len_, hidden_dim_), dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            elif layout_ == "b:h1:s,b:s:s":
+                left_op   = torch.randn((bs_, hidden_dim_, seq_len_), dtype=dtype, device=device)
+                right_op  = torch.randn((bs_, seq_len_,    seq_len_), dtype=dtype, device=device)
+                result_op = torch.zeros((bs_, hidden_dim_, seq_len_), dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = bmm_op_type(left_op, right_op)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            else:
+                raise NotImplementedError(f"Unsupport bmm layout: {layout_}")
+
+        # Benchmark loop
+        recorder = OfflineDataRecorder()
+
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for hidden_dim in bmm_op_hidden_dims:
+                    # """Just for a40 40GB memory"""
+                    # if (bs * seq_len * hidden_dim * hidden_dim - 1) // (1024*1024*1024) + 1 >= 10:
+                    #     continue
+
+                    """LAYOUT_1"""
+                    # Generate query_key and check cache
+                    bmm_layout_1 = "b:s:h1,b:h1:s"
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_1, None, None, None)
+                    recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_1)
+
+                    # Reset
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                    # Test and record
+                    op_latency = __benchmark_one_bmm_op(bs, seq_len, hidden_dim, bmm_layout_1)
+                    recorder._write_one_entry(query_key, op_latency, None)
+
+
+                    """LAYOUT_2"""
+                    # Generate query_key and check cache
+                    bmm_layout_2 = "b:s:s,b:s:h1"
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_2, None, None, None)
+                    recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_2)
+
+                    # Reset
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                    # Test and record
+                    op_latency = __benchmark_one_bmm_op(bs, seq_len, hidden_dim, bmm_layout_2)
+                    recorder._write_one_entry(query_key, op_latency, None)
+
+
+                    """LAYOUT_3"""
+                    # Generate query_key and check cache
+                    bmm_layout_3 = "b:h1:s,b:s:s"
+                    query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, bmm_layout_3, None, None, None)
+                    recorder._check_cache(query_key, "BMM", bs, seq_len, hidden_dim, 0, bmm_layout_3)
+
+                    # Reset
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                    # Test and record
+                    op_latency = __benchmark_one_bmm_op(bs, seq_len, hidden_dim, bmm_layout_3)
+                    recorder._write_one_entry(query_key, op_latency, None)
+
+                    
+        
+        recorder._store()
+
+    def profile_all_baddbmm(self) -> None:
+        """ Profile all REDUCE_SUM operators. """
+        
+        baddbmm_op_type = self.configs.baddbmm_op_type
+        baddbmm_op_hidden_dims  = self.configs.baddbmm_op_hidden_dims
+        device = torch.device(self.configs.device)
+        dtype = self.configs.dtype
+        num_warmup_steps = self.configs.num_warmup_steps
+        num_profile_steps = self.configs.num_profile_steps
+
+        if self.configs.batch_size_step == "power-of-2":
+            batch_sizes = [
+                2**i for i in range(int(self.configs.min_batch_size).bit_length() - 1, 
+                                    int(self.configs.max_batch_size).bit_length())
+            ]   
+        else:
+            raise NotImplementedError()
+        
+        if self.configs.seq_len_step == "power-of-2":
+            seq_lens = [
+                2**i for i in range(int(self.configs.min_seq_len).bit_length() - 1, 
+                                    int(self.configs.max_seq_len).bit_length())
+            ]
+        else:
+            raise NotImplementedError()
+        
+        def __benchmark_one_baddbmm_op(bs_, seq_len_, left_hidden_dim_, layout_):
+            if layout_ == "b:s:s,b:s:h1,b:h1:s":
+                # alpha_ = 1
+                # beta_  = 1
+                baddbmm_op_1 = torch.randn((bs_, seq_len_,         seq_len_),         dtype=dtype, device=device)
+                baddbmm_op_2 = torch.randn((bs_, seq_len_,         left_hidden_dim_), dtype=dtype, device=device)
+                baddbmm_op_3 = torch.randn((bs_, left_hidden_dim_, seq_len_),         dtype=dtype, device=device)
+                result_op    = torch.zeros((bs_, seq_len_,         seq_len_),         dtype=dtype, device=device)
+
+                # Warmup
+                for _ in range(num_warmup_steps):
+                    result_op = baddbmm_op_type(baddbmm_op_1, baddbmm_op_2, baddbmm_op_3)
+                torch.cuda.synchronize()
+
+                # Timer events
+                start_event = torch.cuda.Event(enable_timing=True)
+                end_event = torch.cuda.Event(enable_timing=True)
+
+                # Benchmark
+                start_event.record()
+                for _ in range(num_profile_steps):
+                    result_op = baddbmm_op_type(baddbmm_op_1, baddbmm_op_2, baddbmm_op_3)
+                end_event.record()
+                torch.cuda.synchronize()
+
+                op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+                return op_latency_
+            else:
+                raise NotImplementedError(f"Unsupport reduce_sum layout: {layout_}")
+
+        # Benchmark loop
+        recorder = OfflineDataRecorder()
+
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for baddbmm_hidden_dim in baddbmm_op_hidden_dims:
+                    # """Just for a40 40GB memory"""
+                    # if (bs *  seq_len * baddbmm_hidden_dim - 1) // (1024*1024*1024) + 1 >= 10:
+                    #     continue
+
+                    """LAYOUT_INPUT_GRAD"""
+                    # Generate query_key and check cache
+                    baddbmm_layout = "b:s:s,b:s:h1,b:h1:s"
+                    query_key = OfflineDataRecorder.get_query_key("baddbmm", bs, seq_len, baddbmm_hidden_dim, None, baddbmm_layout, None, None, None)
+                    recorder._check_cache(query_key, "BADDBMM", bs, seq_len, baddbmm_hidden_dim, 0, baddbmm_hidden_dim)
+
+                    # Reset
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+
+                    # Test and record
+                    op_latency = __benchmark_one_baddbmm_op(bs, seq_len, baddbmm_hidden_dim, baddbmm_layout)
+                    recorder._write_one_entry(query_key, op_latency, None)
+                    
+        
+        recorder._store()
+
+    def profile_all_comm(self) -> None:
+        """ Profile all All-Reduce operators. """
+
+        # allreduce_op_type = self.configs.allreduce_op_type
+        # comm_data_sizes = self.configs.comm_data_sizes
+        # dtype = self.configs.dtype
+        # num_warmup_steps = self.configs.num_warmup_steps
+        # num_profile_steps = self.configs.num_profile_steps
+
         # TODO(chunyu): Implementing offline all-reduce profiler...
-        raise NotImplementedError
-
-    
-    def _load(self) -> None:
-        """ Load the collected profiling data from the specified path. """        
-        if not os.path.exists(self._path):
-            logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
-            self.data = {}
-            return
+        commands = [
+        # "torchrun --nnodes=1 --nproc_per_node=1 /app/crius/offline/offline_comm_profile_util.py",
+        "torchrun --nnodes=1 --nproc_per_node=2 /app/crius/offline/offline_comm_profile_util.py",
+        "torchrun --nnodes=1 --nproc_per_node=4 /app/crius/offline/offline_comm_profile_util.py", 
+        # "torchrun --nnodes=1 --nproc_per_node=8 /app/crius/offline/offline_comm_profile.py"
+        ]
         
-        if self.data is None:
-            with open(self._path, 'rb') as f:
-                self.data = pickle.load(f)
-    
-    def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
-        """ Write a single profiling entry to the data store. """
-        if key in self.data and not self.configs.force_overwrite:
-            raise ValueError(f"Key {key} already exists in the profiling data.")
+        print("Running torchrun tests...")
         
-        self.data[key] = {
-            "latency_ms": latency_ms,
-            "memory_footprint_mb": memory_footprint_mb,
-        }
+        for i, cmd in enumerate(commands, 1):
+            print(f"\n{'='*50}")
+            print(f"Running test-{i}/{len(commands)}: {cmd}")
+            print(f"{'='*50}")
+            
+            return_code = os.system(cmd)
+            
+            if return_code == 0:
+                print(f"Test-{i} succeeded")
+            else:
+                print(f"Test-{i} failed (return code: {return_code})")
 
-    def _store(self) -> None:
-        """ Store the collected profiling data to the specified path. """
-        with open(self._path, 'wb') as f:
-            pickle.dump(self.data, f)
-        logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
+    # def _load(self) -> None:
+    #     """ Load the collected profiling data from the specified path. """        
+    #     if not os.path.exists(self._path):
+    #         logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
+    #         self.data = {}
+    #         return
+        
+    #     if self.data is None:
+    #         with open(self._path, 'rb') as f:
+    #             self.data = pickle.load(f)
+    
+    # def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
+    #     """ Write a single profiling entry to the data store. """
+    #     if key in self.data and not self.configs.force_overwrite:
+    #         raise ValueError(f"Key {key} already exists in the profiling data.")
+        
+    #     self.data[key] = {
+    #         "latency_ms": latency_ms,
+    #         "memory_footprint_mb": memory_footprint_mb,
+    #     }
 
-    @classmethod
-    def get_query_key(
-        cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
-        layout: str = "", comm_group_size: int = 1, comm_data_size: int = 1,
-    ) -> str:
-        """ Generate a unique query key for an operation. """
+    # def _store(self) -> None:
+    #     """ Store the collected profiling data to the specified path. """
+    #     with open(self._path, 'wb') as f:
+    #         pickle.dump(self.data, f)
+    #     logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
 
-        if op_type == "gemm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "reduce_sum":
-            assert seq_len is None
-            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
-            assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
+    # @classmethod
+    # def get_query_key(
+    #     cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+    #     layout: str = "", comm_group_size: int = 1, comm_data_size: int = 1,
+    # ) -> str:
+    #     """ Generate a unique query key for an operation. """
+
+    #     if op_type == "gemm":
+    #         return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+    #     elif op_type == "reduce_sum":
+    #         assert seq_len is None
+    #         return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+    #     elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+    #         assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
+    #         return f"{op_type}_g{comm_group_size}_d{comm_data_size}"

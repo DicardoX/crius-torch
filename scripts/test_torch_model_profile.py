@@ -76,14 +76,18 @@ class TorchModelProfileTest(unittest.TestCase):
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
-            min_batch_size=1,
-            max_batch_size=4,
+            min_batch_size=64,
+            max_batch_size=64,
             batch_size_step="power-of-2",
-            min_seq_len=32,
+            min_seq_len=2048,
             max_seq_len=2048,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims=[4096, ],
-            gemm_right_op_hidden_dims=[4096, ],
+            gemm_left_op_hidden_dims= [64, 2048, 4096, 6144, 8192, 25000, ],
+            gemm_right_op_hidden_dims=[64, 2048, 4096, 6144, 8192, 25000, ],
+            reduce_sum_left_op_hidden_dims= [2048, 4096, 6144, 8192, 25000, ],
+            reduce_sum_right_op_hidden_dims=[2048, 4096, 6144, 8192, 25000, ],
+            bmm_op_hidden_dims=    [64, 128, ],
+            baddbmm_op_hidden_dims=[64, 128, ],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -92,11 +96,17 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
+            to_store_path='./crius/offline/data',
             data_filename='prof_data.pkl',
+            # data_filename='prof_comm_data.pkl',
         )
         
-        offline_profiler.profile_all_gemm()
+        # offline_profiler.profile_all_gemm()
+        # offline_profiler.profile_all_reduce_sum()
+        offline_profiler.profile_all_bmm()
+        offline_profiler.profile_all_baddbmm()
+        # offline_profiler.profile_all_comm()
+
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -133,8 +143,8 @@ class TorchModelProfileTest(unittest.TestCase):
         vocab_size = 50000
         
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -199,6 +209,8 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             init_cpu_process_group=True,
+            # num_nodes=1, 
+            # num_devices_per_node=2
         )
         model_parallel_cuda_manual_seed(1234)
 
@@ -252,7 +264,8 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Profile
         profiler = CriusDistProfiler(
-            profiled_data_path='./crius/offline/prof_data.pkl',
+            profiled_cmpt_data_path='./crius/offline/data/prof_data.pkl',
+            profiled_comm_data_path='./crius/offline/data/prof_comm_data.pkl',
         )
         e2e_latency = profiler.profile(
             model=model,
@@ -406,6 +419,8 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.train_backend.megatron.training.utils import (setup_model, get_train_data_iterator, 
                                                                  get_optimizer_and_scheduler, get_input_batch)
 
+        from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
+
         def model_provider(
             hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
             megatron_config: Any = None, use_toy: bool = False,
@@ -425,11 +440,11 @@ class TorchModelProfileTest(unittest.TestCase):
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 10
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
@@ -520,7 +535,15 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_strategy="1f1b",
             forward_only=False,
         )
-        trainer.train()
+        with profile(
+            # activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            activities=[ProfilerActivity.CUDA],
+            profile_memory=True,
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                dir_name = "/app/scripts/ground_truth_logs"),
+            record_shapes=True
+        ) as prof:
+            trainer.train()
 
 
     # ===================> Deprecated tests

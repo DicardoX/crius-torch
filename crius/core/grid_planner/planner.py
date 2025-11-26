@@ -155,7 +155,8 @@ class CriusParallelPlanner:
                         num_marked_nodes = 0
                     
                     if num_marked_nodes == len(parallelism_plan.pipeline_boundary_start_marker):
-                        cur_layer_index += 1
+                        if cur_layer_index + 1 < len(num_fw_nodes_per_layer):
+                            cur_layer_index += 1
                         num_marked_nodes = 0
                     
                     num_fw_nodes_per_layer[max(cur_layer_index, 0)] += 1
