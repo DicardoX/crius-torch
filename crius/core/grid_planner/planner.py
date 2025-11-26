@@ -15,7 +15,7 @@ from crius.core.utils import (estimate_per_op_fwd_memory_access_gb, estimate_per
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (postcompile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
-from crius.global_envs import global_configs, dtype_to_bytes
+from crius.global_envs import global_configs, dtype_to_bytes, logger
 
 __all__ = [ "CriusParallelPlanner", ]
 
@@ -66,7 +66,7 @@ class CriusParallelPlanner:
                 raise ValueError(f"Invalid pipeline stage partition method: {self.pipeline_stage_partition_method}")
 
             # Determine pipeline stage boundary
-            self.__class__.partition_pipeline_stages(graph, plan, bw_graph)
+            self.__class__.partition_pipeline_stages(graph, plan, bw_graph, grid)
             plan.graph = graph
             plan.bw_graph = bw_graph
 
@@ -109,6 +109,7 @@ class CriusParallelPlanner:
     @classmethod
     def partition_pipeline_stages(
         cls, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph] = None,
+        grid: Grid = None,
     ) -> None:
         """ Annotate all nodes' pipeline stage index. """
 
@@ -170,11 +171,18 @@ class CriusParallelPlanner:
             else:
                 raise ValueError(f"In uniform pipeline partition mode, users must either specify the boundary markers or the number of pre/post-process nodes.")
 
+            parallelism_plan.pipeline_num_layers_per_stage = [
+                parallelism_plan.num_layers // parallelism_plan.pipeline_parallel_degree for _ in range(parallelism_plan.pipeline_parallel_degree)
+            ]
             if bw_graph is None:
                 return
         
         elif parallelism_plan.pipeline_stage_partition_method == "auto":
-            CriusParallelPlanner._partition_pipeline_stages_auto(graph, parallelism_plan)
+            num_fw_nodes_per_stage = CriusParallelPlanner._partition_pipeline_stages_auto(graph, parallelism_plan, grid)
+            __annotate_node_stage_index(num_fw_nodes_per_stage, graph)
+
+            if bw_graph is None:
+                return
 
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {parallelism_plan.pipeline_stage_partition_method}")
@@ -186,7 +194,7 @@ class CriusParallelPlanner:
             setattr(node, "stage_index", node.fw_node.stage_index)
     
     @classmethod
-    def _partition_pipeline_stages_auto(cls, graph: IRGraph, parallelism_plan: ParallelismPlan) -> None:
+    def _partition_pipeline_stages_auto(cls, graph: IRGraph, parallelism_plan: ParallelismPlan, grid: Grid) -> List[int]:
         """ Partition pipeline stages based on inter-stage load (i.e., flops) balance. 
         
         Roadmap: The partitioning granularity is considered as transformer layer. We only adjust the number 
@@ -229,7 +237,28 @@ class CriusParallelPlanner:
             per_layer_flops[cur_layer_index] += node.flops
 
         # We then determine stage partition by minimizing inter-stage load variance.
-        raise NotImplementedError
+        num_stages = grid.pipeline_degree
+        num_layers_per_stage = [0 for _ in range(num_stages)]
+        num_fw_nodes_per_stage = [0 for _ in range(num_stages)]
+        # TODO(chunyu): Currently we use a heuristic by sequentially adding layers to stage i until its 
+        # sum of FLOPs reaches sum(layer_FLOPs) / #stages.
+        per_stage_flops_quota = np.sum(per_layer_flops) / num_stages
+        cur_stage_flops, stage_index = 0.0, 0
+        for layer_index in range(parallelism_plan.num_layers + 2):
+            cur_stage_flops += per_layer_flops[layer_index]
+            num_layers_per_stage[stage_index] += 1
+            num_fw_nodes_per_stage[stage_index] += num_fw_nodes_per_layer[layer_index]
+            if cur_stage_flops >= per_stage_flops_quota:
+                stage_index += 1
+                cur_stage_flops = 0.0
+        
+        # Remove pre-/post-loop layers
+        num_layers_per_stage[0] -= 1
+        num_layers_per_stage[-1] -= 1
+        parallelism_plan.pipeline_num_layers_per_stage = num_layers_per_stage
+        logger.info(f"[I] Per-stage number of layers in auto stage partition: {num_layers_per_stage}")
+
+        return num_fw_nodes_per_stage
 
     def _formulate_pareto_optimal_plan_set(self, parallelism_plans: List[ParallelismPlan]) -> List[ParallelismPlan]:
         """ Formulate a set of Pareto-optimal parallelism plans. """
@@ -246,7 +275,15 @@ class CriusParallelPlanner:
             return [optimal_plan, ]
 
         elif self._proto_plan.pipeline_stage_partition_method == "auto":
-            raise NotImplementedError
+            # We also minimize intra-stage communication costs.
+            optimal_plan, least_comm_cost = None, 1e9
+            for plan in parallelism_plans:
+                this_comm_cost = self._evaluate_communication_cost_with_oom_check(plan)
+                if optimal_plan is None or this_comm_cost < least_comm_cost:
+                    optimal_plan = plan
+                    least_comm_cost = this_comm_cost
+            return [optimal_plan, ]
+        
         else:
             raise ValueError(f"Invalid pipeline stage partition method: {self._proto_plan.pipeline_stage_partition_method}")
 

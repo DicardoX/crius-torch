@@ -49,6 +49,10 @@ class ParallelismPlan:
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
     Detailed in `class CriusParallelPlanner`."""
 
+    pipeline_num_layers_per_stage: List[int] = None
+    """ Number of transformer layers in each stage. Pre-loop (e.g., embedding) and post-loop (e.g., output projection) 
+    operators are considered as the first and last layer (The length of this list = num_layers + 2). """
+
     pipeline_use_boundary_markers: bool = False
     """ Whether to use boundary markers to indicate the start and end of a layer in the IR graph. """
 
