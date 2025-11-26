@@ -132,7 +132,10 @@ class CriusParallelPlanner:
                 num_fw_nodes_per_layer = [0 for _ in range(parallelism_plan.num_layers)]
                 cur_layer_index, num_marked_nodes = -1, 0
                 for node in graph.nodes:
-                    if any([_marker in str(node.target) for _marker in parallelism_plan.pipeline_boundary_start_marker]):
+                    if (
+                        "L__self___module" in str(node.target) and
+                        any([_marker in str(node.target) for _marker in parallelism_plan.pipeline_boundary_start_marker])
+                    ):
                         num_marked_nodes += 1
                     else:
                         num_marked_nodes = 0
@@ -186,8 +189,46 @@ class CriusParallelPlanner:
     def _partition_pipeline_stages_auto(cls, graph: IRGraph, parallelism_plan: ParallelismPlan) -> None:
         """ Partition pipeline stages based on inter-stage load (i.e., flops) balance. 
         
-        Notably, currently the partitioning granularity is considered as transformer layer.
+        Roadmap: The partitioning granularity is considered as transformer layer. We only adjust the number 
+        of layers per pipeline stage, while still ensuring each stage is assigned the same number of devices.
         """
+        assert parallelism_plan.pipeline_boundary_start_marker is not None and parallelism_plan.pipeline_boundary_end_marker is not None, \
+            f"Auto stage partition needs to use boundary markers to partition pipeline layers."
+        
+        # We calculate layer FLOPs in this way: 
+        #  - For each looped transformer layer: Accumulate FLOPs of all gemm, bmm, baddbmm operators.
+        #  - For non-looped part: Accumulate two parts, pre-loop (e.g., embedding layer) and post-loop (output layer).
+        num_fw_nodes_per_layer = [0 for _ in range(parallelism_plan.num_layers + 2)]
+        per_layer_flops = [0.0 for _ in range(parallelism_plan.num_layers + 2)]
+        cur_layer_index, num_marked_nodes = 0, 0
+        for node in graph.nodes:
+            if cur_layer_index < parallelism_plan.num_layers:
+                # Non-last layers
+                if (
+                    "L__self___module" in str(node.target) and
+                    any([_marker in str(node.target) for _marker in parallelism_plan.pipeline_boundary_start_marker])
+                ):
+                    num_marked_nodes += 1
+                else:
+                    num_marked_nodes = 0
+            else:
+                # The last layer
+                if (
+                    "L__self___module" in str(node.target) and
+                    any([_marker in str(node.target) for _marker in parallelism_plan.pipeline_boundary_end_marker])
+                ):
+                    num_marked_nodes += 1
+                else:
+                    num_marked_nodes = 0
+            
+            if num_marked_nodes == len(parallelism_plan.pipeline_boundary_start_marker):
+                cur_layer_index += 1
+                num_marked_nodes = 0
+            
+            num_fw_nodes_per_layer[cur_layer_index] += 1
+            per_layer_flops[cur_layer_index] += node.flops
+
+        # We then determine stage partition by minimizing inter-stage load variance.
         raise NotImplementedError
 
     def _formulate_pareto_optimal_plan_set(self, parallelism_plans: List[ParallelismPlan]) -> List[ParallelismPlan]:

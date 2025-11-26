@@ -150,8 +150,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # Parallelism plan
         pipeline_stage_partition_method = "uniform"
         pipeline_use_boundary_markers = True
-        pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
-        pipeline_boundary_end_marker = ['dropout', 'add', ]
+        # pipeline_boundary_start_marker = ['getattr', 'input_layernorm', ]
+        # pipeline_boundary_end_marker = ['dropout', 'add', ]
+        pipeline_boundary_start_marker = ['input_layernorm', ]
+        pipeline_boundary_end_marker = ['final_layernorm', ]
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
