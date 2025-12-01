@@ -23,6 +23,7 @@ from crius.global_envs import logger, global_configs
 
 import torch.distributed as dist
 save_node_info = True
+save_graph_filename = "c_graph_pp2.txt"
 
 class CriusDistProfiler:
     """ Crius Torch-like disaggregated profiler. 
@@ -40,6 +41,9 @@ class CriusDistProfiler:
 
         self.MAX_COMM_SIZE = 1 << 28
         self.LARGE_COMM_SCALE_FACTOR = 1.0
+
+        with open(save_graph_filename, 'w', encoding='utf-8') as file:
+            pass
 
     def _load_profiled_data(self, profiled_data_path: Optional[str] = None) -> None:
         """ Load profiled data from the given path. 
@@ -121,7 +125,7 @@ class CriusDistProfiler:
 
             
             if dist.get_rank() == 0 and save_node_info == True:
-                with open('/app/scripts/c_graph/c_graph_pp2.txt', 'a', encoding = 'utf-8') as f:
+                with open('/app/scripts/c_graph/' + save_graph_filename, 'a', encoding = 'utf-8') as f:
                     f.write(f"{prefix_str_}Node target: {node.target} | " + 
                             f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                             f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 
@@ -140,7 +144,7 @@ class CriusDistProfiler:
 
 
                 if dist.get_rank() == 0 and save_node_info == True:
-                    with open('/app/scripts/c_graph/c_graph_pp2.txt', 'a', encoding = 'utf-8') as f:
+                    with open('/app/scripts/c_graph/' + save_graph_filename, 'a', encoding = 'utf-8') as f:
                         f.write(f"{prefix_str_}Node target: {node.target} | " + 
                                 f"OP type: {node.op} | Layer type: {node.layer_type} | " + 
                                 f"Input shapes: {node.input_shapes} | Output shapes: {node.output_shapes} | " + 

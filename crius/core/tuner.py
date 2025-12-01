@@ -47,7 +47,8 @@ class CriusParallelTuner:
         num_devices_per_node: int,
         proto_parallelism_plan: ParallelismPlan,
         grid_plan_optimization_mode: str = "all",
-        profiled_data_path: Optional[str] = None,
+        profiled_cmpt_data_path: Optional[str] = None,
+        profiled_comm_data_path: Optional[str] = None,
     ):
         self.model = model
         self.num_nodes = num_nodes
@@ -57,7 +58,10 @@ class CriusParallelTuner:
         self._precompiled_fw_graph = None
 
         self.planner = CriusParallelPlanner(model, proto_parallelism_plan)
-        self.profiler = CriusDistProfiler(profiled_data_path)
+        self.profiler = CriusDistProfiler(
+            profiled_cmpt_data_path=profiled_cmpt_data_path, 
+            profiled_comm_data_path=profiled_comm_data_path
+        )
     
     def tune(self, base_input_args: Tuple[Any] = None, base_input_kwargs: Dict[str, Any] = None):
         """ Tune the parallelism plan. 

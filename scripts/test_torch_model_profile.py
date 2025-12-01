@@ -79,11 +79,11 @@ class TorchModelProfileTest(unittest.TestCase):
             min_batch_size=64,
             max_batch_size=64,
             batch_size_step="power-of-2",
-            min_seq_len=2048,
-            max_seq_len=2048,
+            min_seq_len=128,
+            max_seq_len=1024,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims= [64, 2048, 4096, 6144, 8192, 25000, ],
-            gemm_right_op_hidden_dims=[64, 2048, 4096, 6144, 8192, 25000, ],
+            gemm_left_op_hidden_dims= [1024, 2048, 4096, 6144, 8192, ],
+            gemm_right_op_hidden_dims=[1024, 2048, 4096, 6144, 8192, ],
             reduce_sum_left_op_hidden_dims= [2048, 4096, 6144, 8192, 25000, ],
             reduce_sum_right_op_hidden_dims=[2048, 4096, 6144, 8192, 25000, ],
             bmm_op_hidden_dims=    [64, 128, ],
@@ -108,7 +108,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile_all_comm()
 
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -396,7 +396,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -443,8 +443,8 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 

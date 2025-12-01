@@ -181,7 +181,8 @@ class ParallelTuneTest(unittest.TestCase):
             num_devices_per_node=global_configs.num_devices_per_node,
             proto_parallelism_plan=proto_parallelism_plan,
             grid_plan_optimization_mode="all",
-            profiled_data_path='./crius/offline/prof_data.pkl',
+            profiled_cmpt_data_path='./crius/offline/data/prof_data.pkl',
+            profiled_comm_data_path='./crius/offline/data/prof_comm_data.pkl',
         )
         tuner.tune(input_args, input_kwargs)
 
