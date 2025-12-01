@@ -121,6 +121,11 @@ class CriusOfflineDataManager:
         
         self.data = None
         self._load()
+
+    def profile_all(self, opcode: str = "gemm") -> None:
+        """ Profile entrypoint. """
+        # TODO(chunyu): Implement unified APIs for variable-OP offline profiling.
+        raise NotImplementedError()
     
     def profile_all_gemm(self) -> None:
         """ Profile all GEMM operators. """
