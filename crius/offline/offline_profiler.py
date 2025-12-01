@@ -44,7 +44,7 @@ class OfflineProfileConfigs:
     """ Step size to increment sequence length during profiling. """
 
     # GEMM
-    gemm_op_type: Callable = torch.matmul
+    gemm_op_func: Callable = torch.matmul
 
     gemm_left_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the left operand in GEMM operations. """
@@ -52,8 +52,23 @@ class OfflineProfileConfigs:
     gemm_right_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the right operand in GEMM operations. """
 
+    gemm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:s:h1,h1:h2", 
+            "b:s:h2,h2:h1",
+            "b:h1:s,b:s:h2",
+        ]
+    )
+    """ Candidate layouts of GEMM operations. """
+
+    # BMM
+    bmm_op_func: Callable = torch.bmm
+
+    bmm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in BMM operations. """    
+
     # Communication
-    allreduce_op_type: Callable = torch.distributed.all_reduce
+    allreduce_op_func: Callable = torch.distributed.all_reduce
 
     comm_data_sizes: List[int] = field(
         default_factory=lambda: [32*1024*4096, ]
@@ -122,29 +137,21 @@ class CriusOfflineDataManager:
         self.data = None
         self._load()
 
-    def profile_all(self, opcode: str = "gemm") -> None:
+    def profile(self, opcode: str = "gemm") -> None:
         """ Profile entrypoint. """
-        # TODO(chunyu): Implement unified APIs for variable-OP offline profiling.
-        raise NotImplementedError()
-    
-    def profile_all_gemm(self) -> None:
-        """ Profile all GEMM operators. """
         
-        gemm_op_type = self.configs.gemm_op_type
-        gemm_left_op_hidden_dims = self.configs.gemm_left_op_hidden_dims
-        gemm_right_op_hidden_dims = self.configs.gemm_right_op_hidden_dims
-        device = torch.device(self.configs.device)
-        dtype = self.configs.dtype
         num_warmup_steps = self.configs.num_warmup_steps
         num_profile_steps = self.configs.num_profile_steps
-
+        device = torch.device(self.configs.device)
+        dtype = self.configs.dtype
+        op_func, dims_collection = None, []
         if self.configs.batch_size_step == "power-of-2":
             batch_sizes = [
                 2**i for i in range(int(self.configs.min_batch_size).bit_length() - 1, 
                                     int(self.configs.max_batch_size).bit_length())
             ]   
         else:
-            raise NotImplementedError()
+            raise ValueError(f"Invalid batch size step: {self.configs.batch_size_step}")
         
         if self.configs.seq_len_step == "power-of-2":
             seq_lens = [
@@ -152,59 +159,143 @@ class CriusOfflineDataManager:
                                     int(self.configs.max_seq_len).bit_length())
             ]
         else:
-            raise NotImplementedError()
+            raise ValueError(f"Invalid sequence length step: {self.configs.seq_len_step}")
         
-        def __benchmark_one_gemm_op(bs_, seq_len_, left_hidden_dim_, right_hidden_dim_):
-            left_op = torch.randn((bs_, seq_len_, left_hidden_dim_), dtype=dtype, device=device)
-            right_op = torch.randn((left_hidden_dim_, right_hidden_dim_), dtype=dtype, device=device)
-            result_op = torch.zeros((bs_, seq_len_, right_hidden_dim_), dtype=dtype, device=device)
-
-            # Warmup
-            for _ in range(num_warmup_steps):
-                result_op = gemm_op_type(left_op, right_op)
-            torch.cuda.synchronize()
-
-            # Timer events
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-
-            # Benchmark
-            start_event.record()
-            for _ in range(num_profile_steps):
-                result_op = gemm_op_type(left_op, right_op)
-            end_event.record()
-            torch.cuda.synchronize()
-
-            op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-            return op_latency_
-
-        # Benchmark loop
-        for bs in batch_sizes:
-            for seq_len in seq_lens:
-                for left_hidden_dim in gemm_left_op_hidden_dims:
-                    for right_hidden_dim in gemm_right_op_hidden_dims:
-                        query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        if query_key in self.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                            continue
-                        
-                        logger.info(f"==========> GEMM profile: batch_size: {bs}, seq_len: {seq_len}, " + 
-                                    f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                        # Reset
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
-
-                        op_latency = __benchmark_one_gemm_op(bs, seq_len, left_hidden_dim, right_hidden_dim)
-                        self._write_one_entry(query_key, op_latency, None)
+        if opcode == "gemm":
+            op_func = self.configs.gemm_op_func
+            dims_collection = [
+                self.configs.gemm_left_op_hidden_dims,
+                self.configs.gemm_right_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_gemm
+            args = (
+                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
+                num_profile_steps, dtype, device,
+            )
+        elif opcode == "bmm":
+            op_func = self.configs.bmm_op_func
+            dims_collection = [
+                self.configs.bmm_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_bmm
+            args = (
+                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
+                num_profile_steps, dtype, device,
+            )
+        elif opcode == "baddbmm":
+            raise NotImplementedError
+        elif opcode == "reduce_sum":
+            raise NotImplementedError
+        else:
+            raise ValueError(f"Invalid opcode: {opcode}")
         
+        profile_func(*args)
         self._store()
     
+    def _benchmark_one_op(
+        self, opcode: str, op_func: Callable, shapes: List[tuple], num_warmup_steps: int, 
+        num_profile_steps: int, dtype, device,
+    ):
+        """ Benchmark one operator under specific configurations. """
+        if opcode == "gemm":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            right_op = torch.randn(shapes[1], dtype=dtype, device=device)
+            result_op = torch.zeros(shapes[2], dtype=dtype, device=device)
+            args = (left_op, right_op)
+        else:
+            raise ValueError(f"Invalid opcode: {opcode}")
+
+        # Warmup
+        for _ in range(num_warmup_steps):
+            result_op = op_func(*args)
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            result_op = op_func(*args)
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
+        return op_latency_
+
+    def _profile_all_gemm(
+        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
+        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+    ) -> None:
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for left_hidden_dim in dims_collection[0]:
+                    for right_hidden_dim in dims_collection[1]:
+                        for layout in self.configs.gemm_layouts:
+                            if layout == "b:s:h1,h1:h2":
+                                shapes = [
+                                    (bs, seq_len, left_hidden_dim),
+                                    (left_hidden_dim, right_hidden_dim),
+                                    (bs, seq_len, right_hidden_dim),
+                                ]
+                            elif layout == "b:s:h2,h2:h1":
+                                shapes = [
+                                    (bs, seq_len, right_hidden_dim),
+                                    (right_hidden_dim, left_hidden_dim),
+                                    (bs, seq_len, left_hidden_dim),
+                                ]
+                            elif layout == "b:h1:s,b:s:h2":
+                                shapes = [
+                                    (bs, left_hidden_dim, seq_len),
+                                    (bs, seq_len, right_hidden_dim),
+                                    (bs, left_hidden_dim, right_hidden_dim),
+                                ]
+
+                            query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
+                            if query_key in self.data and not self.configs.force_overwrite:
+                                logger.info(f"Cached GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                            f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                                continue
+                            
+                            # Reset
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
+
+                            op_latency = self._benchmark_one_op(
+                                opcode="gemm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                                num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                            )
+                            logger.info(f"==========> GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
+                            self._write_one_entry(query_key, op_latency, None)
+    
+    def _profile_all_bmm(
+        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
+        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+    ) -> None:
+        # TODO(chunyu): Implement similar to self._profile_all_gemm().
+        raise NotImplementedError
+    
+    def _profile_all_baddbmm(
+        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
+        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+    ) -> None:
+        # TODO(chunyu): Implement similar to self._profile_all_gemm().
+        raise NotImplementedError
+    
+    def _profile_all_reduce_sum(
+        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
+        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+    ) -> None:
+        # TODO(chunyu): Implement similar to self._profile_all_gemm().
+        raise NotImplementedError
+
     def profile_all_allreduce(self) -> None:
         """ Profile all All-Reduce operators. """
 
-        allreduce_op_type = self.configs.allreduce_op_type
+        allreduce_op_func = self.configs.allreduce_op_func
         comm_data_sizes = self.configs.comm_data_sizes
         dtype = self.configs.dtype
         num_warmup_steps = self.configs.num_warmup_steps
@@ -212,7 +303,6 @@ class CriusOfflineDataManager:
 
         # TODO(chunyu): Implementing offline all-reduce profiler...
         raise NotImplementedError
-
     
     def _load(self) -> None:
         """ Load the collected profiling data from the specified path. """        
@@ -243,16 +333,16 @@ class CriusOfflineDataManager:
 
     @classmethod
     def get_query_key(
-        cls, op_type: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
+        cls, opcode: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
         layout: str = "", comm_group_size: int = 1, comm_data_size: int = 1,
     ) -> str:
         """ Generate a unique query key for an operation. """
 
-        if op_type == "gemm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "reduce_sum":
+        if opcode == "gemm":
+            return f"{opcode}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif opcode == "reduce_sum":
             assert seq_len is None
-            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
+            return f"{opcode}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif opcode in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{op_type}_g{comm_group_size}_d{comm_data_size}"
+            return f"{opcode}_g{comm_group_size}_d{comm_data_size}"

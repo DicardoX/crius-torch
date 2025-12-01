@@ -70,7 +70,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -96,7 +96,8 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile_all_gemm()
+        offline_profiler.profile(opcode="gemm")
+        
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -385,7 +386,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
