@@ -186,6 +186,9 @@ class CriusOfflineDataManager:
 
     def profile(self, opcode: str = "gemm") -> None:
         """ Profile entrypoint. """
+
+        if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+            return self._profile_communication(opcode)
         
         num_warmup_steps = self.configs.num_warmup_steps
         num_profile_steps = self.configs.num_profile_steps
@@ -452,18 +455,12 @@ class CriusOfflineDataManager:
                                     f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
                         self._write_one_entry(query_key, op_latency, None)
 
-    def profile_all_allreduce(self) -> None:
-        """ Profile all All-Reduce operators. """
+    def _profile_communication(
+        self, opcode: str,
+    ) -> None:
+        """ Profile multi-device communication operators. """
+        raise NotImplementedError        
 
-        allreduce_op_func = self.configs.allreduce_op_func
-        comm_data_sizes = self.configs.comm_data_sizes
-        dtype = self.configs.dtype
-        num_warmup_steps = self.configs.num_warmup_steps
-        num_profile_steps = self.configs.num_profile_steps
-
-        # TODO(chunyu): Implementing offline all-reduce profiler...
-        raise NotImplementedError
-    
     def _load(self) -> None:
         """ Load the collected profiling data from the specified path. """        
         if not os.path.exists(self._path):
