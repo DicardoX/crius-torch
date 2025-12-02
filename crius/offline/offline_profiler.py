@@ -65,7 +65,45 @@ class OfflineProfileConfigs:
     bmm_op_func: Callable = torch.bmm
 
     bmm_op_hidden_dims: List[int] = None
-    """ Candidate hidden dimensions of the operand in BMM operations. """    
+    """ Candidate hidden dimensions of the operand in BMM operations. """  
+
+    bmm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:s:h1,b:h1:s", 
+            "b:s:s,b:s:h1",
+            "b:h1:s,b:s:s",
+        ]
+    )
+    """ Candidate layouts of BMM operations. """ 
+
+    # BADDBMM
+    baddbmm_op_func: Callable = torch.baddbmm
+    
+    baddbmm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in BADDBMM operations. """
+
+    baddbmm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:s:s,b:s:h1,b:h1:s", 
+        ]
+    )
+    """ Candidate layouts of BADDBMM operations. """
+
+    # REDUCE_SUM
+    reduce_sum_op_func: Callable = torch.sum
+
+    reduce_sum_left_op_hidden_dims:  List[int] = None
+    """ Candidate hidden dimensions of the left operand in REDUCE_SUM operations. """
+
+    reduce_sum_right_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the right operand in REDUCE_SUM operations. """
+
+    reduce_sum_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:h1:h2", 
+        ]
+    )
+    """ Candidate layouts of REDUCE_SUM operations. """
 
     # Communication
     allreduce_op_func: Callable = torch.distributed.all_reduce
@@ -94,11 +132,20 @@ class OfflineProfileConfigs:
     """ Forcibly overwrite all profiled data and re-run. """
 
     def __post_init__(self):
-        # GEMM shapes
+        # Default dimensions
+        # TODO(chunyu): Maybe unify with a single attribute like `gemm_like_op_hidden_dim`
         if self.gemm_left_op_hidden_dims is None:
             self.gemm_left_op_hidden_dims = [128, 256, 512, 1024]
         if self.gemm_right_op_hidden_dims is None:
             self.gemm_right_op_hidden_dims = [128, 256, 512, 1024]
+        if self.bmm_op_hidden_dims is None:
+            self.bmm_op_hidden_dims = [128, 256, 512, 1024]
+        if self.baddbmm_op_hidden_dims is None:
+            self.baddbmm_op_hidden_dims = [128, 256, 512, 1024]
+        if self.reduce_sum_left_op_hidden_dims is None:
+            self.reduce_sum_left_op_hidden_dims = [128, 256, 512, 1024]
+        if self.reduce_sum_right_op_hidden_dims is None:
+            self.reduce_sum_right_op_hidden_dims = [128, 256, 512, 1024]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
@@ -168,27 +215,32 @@ class CriusOfflineDataManager:
                 self.configs.gemm_right_op_hidden_dims,
             ]
             profile_func = self._profile_all_gemm
-            args = (
-                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
-                num_profile_steps, dtype, device,
-            )
         elif opcode == "bmm":
             op_func = self.configs.bmm_op_func
             dims_collection = [
                 self.configs.bmm_op_hidden_dims,
             ]
             profile_func = self._profile_all_bmm
-            args = (
-                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
-                num_profile_steps, dtype, device,
-            )
         elif opcode == "baddbmm":
-            raise NotImplementedError
+            op_func = self.configs.baddbmm_op_func
+            dims_collection = [
+                self.configs.baddbmm_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_baddbmm
         elif opcode == "reduce_sum":
-            raise NotImplementedError
+            op_func = self.configs.reduce_sum_op_func
+            dims_collection = [
+                self.configs.reduce_sum_left_op_hidden_dims,
+                self.configs.reduce_sum_right_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_reduce_sum
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
         
+        args = (
+            op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
+            num_profile_steps, dtype, device,
+        )
         profile_func(*args)
         self._store()
     
@@ -197,11 +249,22 @@ class CriusOfflineDataManager:
         num_profile_steps: int, dtype, device,
     ):
         """ Benchmark one operator under specific configurations. """
-        if opcode == "gemm":
+        if opcode in ("gemm", "bmm"):
             left_op = torch.randn(shapes[0], dtype=dtype, device=device)
             right_op = torch.randn(shapes[1], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[2], dtype=dtype, device=device)
-            args = (left_op, right_op)
+            args = (left_op, right_op, )
+        elif opcode == "baddbmm":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            mid_op = torch.randn(shapes[1], dtype=dtype, device=device)
+            right_op = torch.randn(shapes[2], dtype=dtype, device=device)
+            result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
+            args = (left_op, mid_op, right_op, )
+        elif opcode == "reduce_sum":
+            dim = 0     # FIXME(chunyu): Currently fixed.
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            result_op = torch.zeros(shapes[1], dtype=dtype, device=device)
+            args = (left_op, 0, )
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
 
@@ -252,7 +315,9 @@ class CriusOfflineDataManager:
                                     (bs, left_hidden_dim, right_hidden_dim),
                                 ]
 
-                            query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
+                            query_key = CriusOfflineDataManager.get_query_key(
+                                "gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, layout,
+                            )
                             if query_key in self.data and not self.configs.force_overwrite:
                                 logger.info(f"Cached GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
                                             f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
@@ -275,22 +340,117 @@ class CriusOfflineDataManager:
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
-        # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for hidden_dim in dims_collection[0]:
+                    for layout in self.configs.bmm_layouts:
+                        if layout == "b:s:h1,b:h1:s":
+                            shapes = [
+                                (bs, seq_len, hidden_dim),
+                                (bs, hidden_dim, seq_len),
+                                (bs, seq_len, seq_len),
+                            ]
+                        elif layout == "b:s:s,b:s:h1":
+                            shapes = [
+                                (bs, seq_len, seq_len),
+                                (bs, seq_len, hidden_dim),
+                                (bs, seq_len, hidden_dim),
+                            ]
+                        elif layout == "b:h1:s,b:s:s":
+                            shapes = [
+                                (bs, hidden_dim, seq_len),
+                                (bs, seq_len, seq_len),
+                                (bs, hidden_dim, seq_len),
+                            ]
+
+                        query_key = CriusOfflineDataManager.get_query_key("bmm", bs, seq_len, hidden_dim, None, layout)
+                        if query_key in self.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached BMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                        f"hd: {hidden_dim}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="bmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> BMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                    f"hd: {hidden_dim}, latency (ms): {op_latency}")
+                        self._write_one_entry(query_key, op_latency, None)
     
     def _profile_all_baddbmm(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
-        # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for hidden_dim in dims_collection[0]:
+                    for layout in self.configs.baddbmm_layouts:
+                        if layout == "b:s:s,b:s:h1,b:h1:s":
+                            shapes = [
+                                (bs, seq_len, seq_len),
+                                (bs, seq_len, hidden_dim),
+                                (bs, hidden_dim, seq_len),
+                                (bs, seq_len, seq_len),
+                            ]
+
+                        query_key = CriusOfflineDataManager.get_query_key("baddbmm", bs, seq_len, hidden_dim, None, layout)
+                        if query_key in self.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached baddbmm profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                        f"hd: {hidden_dim}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="baddbmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> baddbmm profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                    f"hd: {hidden_dim}, latency (ms): {op_latency}")
+                        self._write_one_entry(query_key, op_latency, None)
     
     def _profile_all_reduce_sum(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
-        # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for left_hidden_dim in dims_collection[0]:
+                for right_hidden_dim in dims_collection[1]:
+                    for layout in self.configs.reduce_sum_layouts:
+                        if layout == "b:h1:h2":
+                            shapes = [
+                                (bs, left_hidden_dim, right_hidden_dim),
+                                (left_hidden_dim, right_hidden_dim),
+                            ]
+
+                        query_key = CriusOfflineDataManager.get_query_key(
+                            "reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, layout,
+                        )
+                        if query_key in self.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached reduce_sum profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="reduce_sum", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> reduce_sum profile: layout: {layout}, batch_size: {bs}, " + 
+                                    f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
+                        self._write_one_entry(query_key, op_latency, None)
 
     def profile_all_allreduce(self) -> None:
         """ Profile all All-Reduce operators. """
@@ -340,9 +500,14 @@ class CriusOfflineDataManager:
 
         if opcode == "gemm":
             return f"{opcode}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif opcode in ("bmm", "baddbmm"):
+            assert right_op_hidden_dim is None
+            return f"{opcode}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif opcode == "reduce_sum":
             assert seq_len is None
             return f"{opcode}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif opcode in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{opcode}_g{comm_group_size}_d{comm_data_size}"
+        else:
+            raise ValueError(f"Unsupported opcode: {opcode}")
