@@ -5,6 +5,7 @@
 """ Offline profiler to collect operator-level performance metrics ahead of time. """
 
 import os
+import time
 from typing import (Any, Dict, List, Optional, Tuple, Union, Callable)
 from dataclasses import dataclass, field
 import pickle
@@ -14,6 +15,8 @@ import torch
 from torch import nn
 
 from crius.global_envs import logger
+from crius.offline.offline_recorder import OfflineDataRecorder
+import torch.distributed as dist
 
 __all__ = [
     "OfflineProfileConfigs",
@@ -43,7 +46,7 @@ class OfflineProfileConfigs:
     seq_len_step: Union[int, str] = "power-of-2"
     """ Step size to increment sequence length during profiling. """
 
-    # GEMM
+    ##################### GEMM #####################
     gemm_op_func: Callable = torch.matmul
 
     gemm_left_op_hidden_dims: List[int] = None
@@ -54,27 +57,66 @@ class OfflineProfileConfigs:
 
     gemm_layouts: List[str] = field(
         default_factory=lambda: [
-            "b:s:h1,h1:h2", 
+            "s:b:h1,h1:h2", 
             "b:s:h2,h2:h1",
             "b:h1:s,b:s:h2",
         ]
     )
     """ Candidate layouts of GEMM operations. """
 
-    # BMM
+    ##################### BMM #####################
     bmm_op_func: Callable = torch.bmm
 
     bmm_op_hidden_dims: List[int] = None
-    """ Candidate hidden dimensions of the operand in BMM operations. """    
+    """ Candidate hidden dimensions of the operand in BMM operations. """   
 
-    # Communication
+    bmm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:s:h1,b:h1:s", 
+            "b:s:s,b:s:h1",
+            "b:h1:s,b:s:s",
+        ]
+    )
+    """ Candidate layouts of BMM operations. """ 
+
+    ##################### BADDBMM #####################
+    baddbmm_op_func: Callable = torch.baddbmm
+
+    baddbmm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in BADDBMM operations. """  
+
+    baddbmm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:s:s,b:s:h1,b:h1:s", 
+        ]
+    )
+    """ Candidate layouts of BADDBMM operations. """  
+
+    ##################### REDUCE_SUM #####################
+    reducesum_op_func: Callable = torch.sum
+
+    reducesum_left_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the left operand in REDUCESUM operations. """ 
+
+    reducesum_right_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the right operand in REDUCESUM operations. """   
+
+    reducesum_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:h1:h2", 
+        ]
+    )
+    """ Candidate layouts of REDUCE_SUM operations. """ 
+
+    ##################### Communication #####################
     allreduce_op_func: Callable = torch.distributed.all_reduce
 
-    comm_data_sizes: List[int] = field(
-        default_factory=lambda: [32*1024*4096, ]
-    )
+    comm_data_sizes: List[int] = None
     """ Communication data sizes. """
 
+    comm_nodes_num: int = 1
+    """ Number of machines in this communication group. """
+    
     comm_group_size: int = 1
     """ Number of ranks in this communication group. """
 
@@ -99,6 +141,8 @@ class OfflineProfileConfigs:
             self.gemm_left_op_hidden_dims = [128, 256, 512, 1024]
         if self.gemm_right_op_hidden_dims is None:
             self.gemm_right_op_hidden_dims = [128, 256, 512, 1024]
+        if self.comm_data_sizes is None:
+            self.comm_data_sizes = [2**i for i in range(1,31)]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
@@ -121,21 +165,26 @@ class CriusOfflineDataManager:
     def __init__(
         self, 
         profile_configs: OfflineProfileConfigs,
-        to_store_path: str = "./crius/offline/", 
+        to_store_path: str = "./crius/offline/data/", 
         data_filename: str = "prof_data.pkl",
     ) -> None:
     
         self.configs = profile_configs
 
-        self.to_store_path = to_store_path
-        self.filename = data_filename
-        self._path = os.path.join(self.to_store_path, self.filename)
-        if not os.path.exists(to_store_path):
-            os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
-            logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
+        # self.to_store_path = to_store_path
+        # self.filename = data_filename
+        # self._path = os.path.join(self.to_store_path, self.filename)
+        # if not os.path.exists(to_store_path):
+        #     os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
+        #     logger.warning(f"Created directory for profiling data: {os.path.dirname(to_store_path)}")
         
-        self.data = None
-        self._load()
+        # self.data = None
+        
+        self.recorder = OfflineDataRecorder(
+            to_store_path = "./crius/offline/data",
+            data_filename = "prof_data.pkl",
+            force_overwrite = profile_configs.force_overwrite
+        )
 
     def profile(self, opcode: str = "gemm") -> None:
         """ Profile entrypoint. """
@@ -183,14 +232,34 @@ class CriusOfflineDataManager:
                 num_profile_steps, dtype, device,
             )
         elif opcode == "baddbmm":
-            raise NotImplementedError
+            op_func = self.configs.baddbmm_op_func
+            dims_collection = [
+                self.configs.baddbmm_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_baddbmm
+            args = (
+                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
+                num_profile_steps, dtype, device,
+            )
         elif opcode == "reduce_sum":
-            raise NotImplementedError
+            op_func = self.configs.reducesum_op_func
+            dims_collection = [
+                self.configs.reducesum_left_op_hidden_dims,
+                self.configs.reducesum_right_op_hidden_dims,
+            ]
+            profile_func = self._profile_all_reduce_sum
+            args = (
+                op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
+                num_profile_steps, dtype, device,
+            )
+        elif opcode == "all_reduce":
+            profile_func = self.profile_all_allreduce
+            args = ()
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
         
         profile_func(*args)
-        self._store()
+        self.recorder._store()
     
     def _benchmark_one_op(
         self, opcode: str, op_func: Callable, shapes: List[tuple], num_warmup_steps: int, 
@@ -202,6 +271,22 @@ class CriusOfflineDataManager:
             right_op = torch.randn(shapes[1], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[2], dtype=dtype, device=device)
             args = (left_op, right_op)
+        elif opcode == "bmm":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            right_op = torch.randn(shapes[1], dtype=dtype, device=device)
+            result_op = torch.zeros(shapes[2], dtype=dtype, device=device)
+            args = (left_op, right_op)
+        elif opcode == "baddbmm":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            midd_op = torch.randn(shapes[1], dtype=dtype, device=device)
+            right_op = torch.randn(shapes[2], dtype=dtype, device=device)
+            result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
+            args = (left_op, midd_op, right_op)
+        elif opcode == "reduce_sum":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            dim = 0
+            result_op = torch.zeros(shapes[1], dtype=dtype, device=device)
+            args = (left_op, dim)
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
 
@@ -233,7 +318,7 @@ class CriusOfflineDataManager:
                 for left_hidden_dim in dims_collection[0]:
                     for right_hidden_dim in dims_collection[1]:
                         for layout in self.configs.gemm_layouts:
-                            if layout == "b:s:h1,h1:h2":
+                            if layout == "s:b:h1,h1:h2":
                                 shapes = [
                                     (bs, seq_len, left_hidden_dim),
                                     (left_hidden_dim, right_hidden_dim),
@@ -251,12 +336,11 @@ class CriusOfflineDataManager:
                                     (bs, seq_len, right_hidden_dim),
                                     (bs, left_hidden_dim, right_hidden_dim),
                                 ]
+                            else:
+                                raise NotImplementedError(f"Unsupport gemm layout: {layout}")
 
-                            query_key = CriusOfflineDataManager.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim)
-                            if query_key in self.data and not self.configs.force_overwrite:
-                                logger.info(f"Cached GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                            f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                                continue
+                            query_key = OfflineDataRecorder.get_query_key("gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, layout, None, None, None)
+                            self.recorder._check_cache(query_key, "GEMM", bs, seq_len, left_hidden_dim, right_hidden_dim, layout)
                             
                             # Reset
                             gc.collect()
@@ -268,29 +352,125 @@ class CriusOfflineDataManager:
                                 num_profile_steps=num_profile_steps, dtype=dtype, device=device,
                             )
                             logger.info(f"==========> GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
-                            self._write_one_entry(query_key, op_latency, None)
+                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, latency (ms): {op_latency}")
+                            self.recorder._write_one_entry(query_key, op_latency, None)
     
     def _profile_all_bmm(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
         # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for left_hidden_dim in dims_collection[0]:
+                    # for right_hidden_dim in dims_collection[1]:
+                    for layout in self.configs.bmm_layouts:
+                        if layout == "b:s:h1,b:h1:s":
+                            shapes = [
+                                (bs, seq_len        , left_hidden_dim),
+                                (bs, left_hidden_dim, seq_len        ),
+                                (bs, seq_len        , seq_len        ),
+                            ]
+                        elif layout == "b:s:s,b:s:h1":
+                            shapes = [
+                                (bs, seq_len        , seq_len        ),
+                                (bs, seq_len        , left_hidden_dim),
+                                (bs, seq_len        , left_hidden_dim),
+                            ]
+                        elif layout ==  "b:h1:s,b:s:s":
+                            shapes = [
+                                (bs, left_hidden_dim, seq_len),
+                                (bs, seq_len        , seq_len),
+                                (bs, left_hidden_dim, seq_len),
+                            ]
+                        else:
+                            raise NotImplementedError(f"Unsupport gemm layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, left_hidden_dim, None, layout, None, None, None)
+                        self.recorder._check_cache(query_key, "BMM", bs, seq_len, left_hidden_dim, 0, layout)
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="bmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> BMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                    f"left_hd: {left_hidden_dim}, right_hd: /, latency (ms): {op_latency}")
+                        self.recorder._write_one_entry(query_key, op_latency, None)
     
     def _profile_all_baddbmm(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
         # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for left_hidden_dim in dims_collection[0]:
+                    # for right_hidden_dim in dims_collection[1]:
+                    for layout in self.configs.baddbmm_layouts:
+                        if layout == "b:s:s,b:s:h1,b:h1:s":
+                            shapes = [
+                                (bs, seq_len        , seq_len        ),
+                                (bs, seq_len        , left_hidden_dim),
+                                (bs, left_hidden_dim, seq_len        ),
+                                (bs, seq_len        , seq_len        ),
+                            ]
+                        else:
+                            raise NotImplementedError(f"Unsupport gemm layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key("baddbmm", bs, seq_len, left_hidden_dim, None, layout, None, None, None)
+                        self.recorder._check_cache(query_key, "BADDBMM", bs, seq_len, left_hidden_dim, 0, layout)
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="baddbmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> BADDBMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                    f"left_hd: {left_hidden_dim}, right_hd: /, latency (ms): {op_latency}")
+                        self.recorder._write_one_entry(query_key, op_latency, None)
     
     def _profile_all_reduce_sum(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
         seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
     ) -> None:
         # TODO(chunyu): Implement similar to self._profile_all_gemm().
-        raise NotImplementedError
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for left_hidden_dim in dims_collection[0]:
+                    for right_hidden_dim in dims_collection[1]:
+                        for layout in self.configs.reducesum_layouts:
+                            if layout == "b:h1:h2":
+                                shapes = [
+                                    (bs, left_hidden_dim, right_hidden_dim),
+                                    (    left_hidden_dim, right_hidden_dim),
+                                ]
+                            else:
+                                raise NotImplementedError(f"Unsupport gemm layout: {layout}")
+
+                            query_key = OfflineDataRecorder.get_query_key("reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, layout, None, None, None)
+                            self.recorder._check_cache(query_key, "REDUCE_SUM", bs, 0, left_hidden_dim, right_hidden_dim, layout)
+                            
+                            # Reset
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
+
+                            op_latency = self._benchmark_one_op(
+                                opcode="reduce_sum", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
+                                num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                            )
+                            logger.info(f"==========> REDUCESUM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
+                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, latency (ms): {op_latency}")
+                            self.recorder._write_one_entry(query_key, op_latency, None)
 
     def profile_all_allreduce(self) -> None:
         """ Profile all All-Reduce operators. """
@@ -302,47 +482,72 @@ class CriusOfflineDataManager:
         num_profile_steps = self.configs.num_profile_steps
 
         # TODO(chunyu): Implementing offline all-reduce profiler...
-        raise NotImplementedError
-    
-    def _load(self) -> None:
-        """ Load the collected profiling data from the specified path. """        
-        if not os.path.exists(self._path):
-            logger.warning(f"No profiling data found at {self.to_store_path}. Starting from-scratch profiling.")
-            self.data = {}
-            return
+        def setup(world_size, rank, backend="nccl"):
+            """ Initialize distribution. """
+            dist.init_process_group(world_size=world_size, rank=rank, backend=backend)
+            torch.cuda.set_device(rank)
+
+        def cleanup():
+            """ Postprocess distribution. """
+            dist.destroy_process_group()
+
+        def sync_barrier():
+            """ Synchronization. """
+            dist.barrier()
+
+        def measure_latency(fn, *args, **kwargs):
+            """ Measure the latency of the communicaton operation, use the maximum. """
+            sync_barrier()
+            start = time.time()
+            fn(*args, **kwargs)
+            torch.cuda.synchronize()  
+            end = time.time()
+            local_latency_ms = torch.tensor([(end - start) * 1000], dtype=dtype, device="cuda")
+
+            dist.all_reduce(local_latency_ms, op=dist.ReduceOp.MAX)
+            return local_latency_ms.item()
+
+        def profile_all_reduce(tensor_size, dtype):
+            """ Measure the latency of all_gather operation, given tensor_size and dtype . """
+            tensor = torch.randn(tensor_size, device="cuda", dtype=dtype)
+            return measure_latency(allreduce_op_func, tensor, dist.ReduceOp.SUM)
+
+        def run_profile(nodes_num, group_size, rank):
+            """ Launch the communication offline profiling. """
+            # tensor_sizes = [2**i for i in range(1,31)]
+
+            for tensor_size in comm_data_sizes: 
+                all_reduce_latency_ms = profile_all_reduce(tensor_size, dtype)
+
+                if rank == 0:
+                    query_key = OfflineDataRecorder.get_query_key("all_reduce", None, None, None, None, None, nodes_num, group_size, tensor_size)
+                    # offline_data_manager._check_cache(query_key, "all_reduce", nodes_num, group_size, tensor_size)
+
+                # Reset
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+                if rank == 0:
+                    logger.info(f"==========> ALLREDUCE profile: nodes_num: {nodes_num}, group_size: {group_size}, tensor_size: {tensor_size}")
+                    self.recorder._write_one_entry(query_key, all_reduce_latency_ms, None)
+
+            if rank == 0:
+                self.recorder._store()
+     
         
-        if self.data is None:
-            with open(self._path, 'rb') as f:
-                self.data = pickle.load(f)
-    
-    def _write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
-        """ Write a single profiling entry to the data store. """
-        if key in self.data and not self.configs.force_overwrite:
-            raise ValueError(f"Key {key} already exists in the profiling data.")
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+        rank = int(os.environ["LOCAL_RANK"])
+        nodes_num = (world_size - 1) // local_world_size + 1
         
-        self.data[key] = {
-            "latency_ms": latency_ms,
-            "memory_footprint_mb": memory_footprint_mb,
-        }
+        setup(world_size, rank, "nccl")
 
-    def _store(self) -> None:
-        """ Store the collected profiling data to the specified path. """
-        with open(self._path, 'wb') as f:
-            pickle.dump(self.data, f)
-        logger.info(f"\n\n=========> Offline profiling data is stored in: {self.to_store_path}")
+        run_profile(nodes_num, world_size, rank)
+        
+        cleanup() 
 
-    @classmethod
-    def get_query_key(
-        cls, opcode: str, batch_size: int, seq_len: int, left_op_hidden_dim: int, right_op_hidden_dim: int,
-        layout: str = "", comm_group_size: int = 1, comm_data_size: int = 1,
-    ) -> str:
-        """ Generate a unique query key for an operation. """
+        
 
-        if opcode == "gemm":
-            return f"{opcode}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif opcode == "reduce_sum":
-            assert seq_len is None
-            return f"{opcode}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif opcode in ("all_reduce", "all_gather", "reduce_scatter", "all_to_all"):
-            assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{opcode}_g{comm_group_size}_d{comm_data_size}"
+          
+        

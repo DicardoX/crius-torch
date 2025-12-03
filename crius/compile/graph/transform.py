@@ -148,7 +148,7 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
                 "matmul" in str(node.target)
             ):
                 setattr(node, "layer_type", "gemm")
-                setattr(node, "layout", "b:s:h1,h1:h2")
+                setattr(node, "layout", "s:b:h1,h1:h2")
             elif (
                 # ------------- String matching rules -------------
                 "baddbmm" in str(node.target)
@@ -439,7 +439,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
         if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
             assert len(node.input_shapes[0]) == len(node.output_shapes[0]) == 3
             assert len(node.input_shapes[1]) == 2
-            (batch_size, seq_len, left_hidden_dim) = node.input_shapes[0]
+            (seq_len, batch_size, left_hidden_dim) = node.input_shapes[0]
             right_hidden_dim = node.input_shapes[1][-1]
 
             # Input gradient: [b, s, h2] x [h2, h1] -> [b, s, h1]

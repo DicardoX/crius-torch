@@ -75,6 +75,8 @@ class TorchModelProfileTest(unittest.TestCase):
         """ Offline profile all operators."""
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
+        import torch.distributed as dist
+        
         profile_configs = OfflineProfileConfigs(
             min_batch_size=1,
             max_batch_size=4,
@@ -84,6 +86,11 @@ class TorchModelProfileTest(unittest.TestCase):
             seq_len_step="power-of-2",
             gemm_left_op_hidden_dims=[4096, ],
             gemm_right_op_hidden_dims=[4096, ],
+            bmm_op_hidden_dims=[1024, 2048, 4096, ],
+            baddbmm_op_hidden_dims=[1024, 2048, 4096, ],
+            reducesum_left_op_hidden_dims= [4096, ],
+            reducesum_right_op_hidden_dims=[4096, ],
+            comm_data_sizes = [2**i for i in range(1,31)],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -92,11 +99,19 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
-            to_store_path='./crius/offline/',
+            to_store_path='./crius/offline/data/',
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile(opcode="gemm")
+        local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+        
+        if local_world_size <= 1:
+            offline_profiler.profile(opcode="gemm")
+            offline_profiler.profile(opcode="bmm")
+            offline_profiler.profile(opcode="baddbmm")
+            offline_profiler.profile(opcode="reduce_sum")
+        else:
+            offline_profiler.profile(opcode="all_reduce")
         
 
     @unittest.skip("Pass.")
