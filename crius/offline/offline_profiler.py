@@ -459,7 +459,7 @@ class CriusOfflineDataManager:
         self, opcode: str,
     ) -> None:
         """ Profile multi-device communication operators. """
-        raise NotImplementedError        
+        raise NotImplementedError
 
     def _load(self) -> None:
         """ Load the collected profiling data from the specified path. """        
