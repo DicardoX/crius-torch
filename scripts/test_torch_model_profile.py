@@ -96,12 +96,12 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        # offline_profiler.profile(opcode="gemm")
-        # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
-        # offline_profiler.profile(opcode="reduce_sum")
+        offline_profiler.profile(opcode="gemm")
+        offline_profiler.profile(opcode="bmm")
+        offline_profiler.profile(opcode="baddbmm")
+        offline_profiler.profile(opcode="reduce_sum")
 
-        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="all_reduce")
         
 
     @unittest.skip("Pass.")
