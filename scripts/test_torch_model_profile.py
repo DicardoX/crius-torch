@@ -84,6 +84,7 @@ class TorchModelProfileTest(unittest.TestCase):
             seq_len_step="power-of-2",
             gemm_left_op_hidden_dims=[4096, ],
             gemm_right_op_hidden_dims=[4096, ],
+            comm_data_sizes = [2**i for i in range(1,31)],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
@@ -96,12 +97,12 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile(opcode="gemm")
-        offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
-        offline_profiler.profile(opcode="reduce_sum")
+        # offline_profiler.profile(opcode="gemm")
+        # offline_profiler.profile(opcode="bmm")
+        # offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="reduce_sum")
 
-        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="all_reduce")
         
 
     @unittest.skip("Pass.")

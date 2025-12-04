@@ -8,6 +8,7 @@ import os
 from typing import (Any, Dict, List, Optional, Tuple, Union, Callable)
 from dataclasses import dataclass, field
 import pickle
+import time
 import gc
 
 import torch
@@ -264,12 +265,22 @@ class CriusOfflineDataManager:
             left_op = torch.randn(shapes[0], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[1], dtype=dtype, device=device)
             args = (left_op, 0, )
+        elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+            tensor = torch.randn(shapes[0], dtype=dtype).cuda()
+            if opcode == "all_reduce":
+                args = (tensor, torch.distributed.ReduceOp.SUM, )
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
 
+        def __exec():
+            if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+                op_func(*args)
+            else:
+                result_op = op_func(*args)
+
         # Warmup
         for _ in range(num_warmup_steps):
-            result_op = op_func(*args)
+            __exec()
         torch.cuda.synchronize()
 
         # Timer events
@@ -279,12 +290,17 @@ class CriusOfflineDataManager:
         # Benchmark
         start_event.record()
         for _ in range(num_profile_steps):
-            result_op = op_func(*args)
+            __exec()
         end_event.record()
         torch.cuda.synchronize()
 
-        op_latency_ = start_event.elapsed_time(end_event) / num_profile_steps
-        return op_latency_
+        op_latency = start_event.elapsed_time(end_event) / num_profile_steps
+        if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+            op_latency = torch.tensor([op_latency, ], device=device, dtype=dtype)
+            torch.distributed.all_reduce(op_latency, op=torch.distributed.ReduceOp.MAX)
+            op_latency = op_latency.item()    # Use the maximum latency across all ranks.
+
+        return op_latency
 
     def _profile_all_gemm(
         self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
@@ -455,4 +471,57 @@ class CriusOfflineDataManager:
         self, opcode: str,
     ) -> None:
         """ Profile multi-device communication operators. """
-        raise NotImplementedError
+        
+        num_warmup_steps = self.configs.num_warmup_steps
+        num_profile_steps = self.configs.num_profile_steps
+        comm_data_sizes = self.configs.comm_data_sizes
+        dtype = self.configs.dtype
+        op_func = None
+        if opcode == "all_reduce":
+            op_func = self.configs.allreduce_op_func
+        
+        def __setup(world_size: int, rank: int, backend: str = "nccl"):
+            """ Initialize the distributed environment. """
+            torch.distributed.init_process_group(world_size=world_size, rank=rank, backend=backend)
+            torch.cuda.set_device(rank)
+        
+        def __cleanup():
+            """ Clean up the distributed environment. """
+            torch.distributed.destroy_process_group()
+        
+        def __sync_barrier():
+            """ Synchronize all processes. """
+            torch.distributed.barrier()
+
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
+        rank = int(os.environ["LOCAL_RANK"])
+        num_nodes = (world_size - 1) // local_world_size + 1
+        __setup(world_size=world_size, rank=rank, backend="nccl")
+
+        for tensor_size in comm_data_sizes:
+            # Reset
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            __sync_barrier()
+
+            op_latency = self._benchmark_one_op(
+                opcode=opcode, op_func=op_func, shapes=[(tensor_size, ), ], num_warmup_steps=num_warmup_steps, 
+                num_profile_steps=num_profile_steps, dtype=dtype, device=torch.cuda.current_device(),
+            )
+
+            if rank == 0:
+                query_key = OfflineDataRecorder.get_query_key(
+                    opcode, None, None, None, None, None, num_nodes, world_size, tensor_size,
+                )
+                logger.info(
+                    f"==========> {opcode} profile: num_nodes: {num_nodes}, group_size: {world_size}, " + \
+                    f"tensor_size: {tensor_size}, latency (ms): {op_latency}"
+                )
+                self.recorder.write_one_entry(query_key, op_latency, None)
+        
+        __cleanup()
+        if rank == 0:
+            self.recorder.store()
+        
