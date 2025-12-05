@@ -18,7 +18,8 @@ from crius.core.utils import estimate_model_memory_access_gb
 from crius.model_parallel.utils import ParallelismPlan
 from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
-from crius.offline.offline_profiler import CriusOfflineDataManager
+# from crius.offline.offline_profiler import CriusOfflineDataManager
+from crius.offline.offline_recorder import OfflineDataRecorder
 from crius.global_envs import logger, global_configs
 
 
@@ -66,7 +67,7 @@ class CriusDistProfiler:
             graph: (Optional) Pre-generated forward IR graph.
             bw_graph: (Optional) Pre-generated backward IR graph.
             check_oom: (Optional): If true, check out-of-memory after stage partition.
-
+        
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
         """
@@ -172,12 +173,15 @@ class CriusDistProfiler:
                         
                         else:
                             logger.warning(f"Ignored node type {node.layer_type} in latency query.")
-                        
-                        query_key = CriusOfflineDataManager.get_query_key(
+                        query_key = OfflineDataRecorder.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
                             node.layout, comm_group_size, comm_data_size,
                         )
+
                         if query_key in self._profiled_data:
+                            print(query_key)
+                            exit(0)
+                            
                             node_latency = self._profiled_data[query_key]["latency_ms"]
                         else:
                             logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")

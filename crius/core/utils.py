@@ -49,10 +49,10 @@ def estimate_per_op_fwd_flops(graph: IRGraph) -> None:
         node.flops = 0.0
 
         if node.layer_type == "gemm":
-            # Shape: [b, s, h1] x [h1, h2]
-            (b, s, h1) = node.input_shapes[0]
+            # Shape: [s, b, h1] x [h1, h2]
+            (s, b, h1) = node.input_shapes[0]
             h2 = node.input_shapes[1][-1]
-            node.flops = (b * s * h2) * (2 * h1 - 1)
+            node.flops = (s * b * h2) * (2 * h1 - 1)
             
         elif node.layer_type == "bmm":
             # Shape: [b, s, s] x [b, s, h1] 

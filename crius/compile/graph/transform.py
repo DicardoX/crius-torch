@@ -125,13 +125,13 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
                 "fc" in str(node.target)
             ):
                 setattr(node, "layer_type", "gemm")
-                setattr(node, "layout", "b:s:h1,h1:h2")
+                setattr(node, "layout", "s:b:h1,h1:h2")     # Used in Megatron
             elif (
                 # ------------- String matching rules -------------
                 "layernorm" in str(node.target)
             ):
                 setattr(node, "layer_type", "layernorm")
-                setattr(node, "layout", "b:s:h1")
+                setattr(node, "layout", "s:b:h1")
             else:
                 setattr(node, "layer_type", "unknown_call_module")
                 setattr(node, "layout", None)
@@ -148,7 +148,7 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
                 "matmul" in str(node.target)
             ):
                 setattr(node, "layer_type", "gemm")
-                setattr(node, "layout", "b:s:h1,h1:h2")
+                setattr(node, "layout", "s:b:h1,h1:h2")     # Used in Megatron
             elif (
                 # ------------- String matching rules -------------
                 "baddbmm" in str(node.target)
@@ -211,14 +211,14 @@ def shard_compute_node_input_output_shapes(
         if cur_marker_keyword in (
             "self_attention_linear_qkv_weight", "mlp_linear_fc1_weight", "output_layer_weight", 
         ):
-            if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
+            if node.layer_type == "gemm":   # [s, b, h1] x [h1, h2] -> [s, b, h2]
                 # Column parallel linear
                 assert len(node.input_shapes) == 2
                 assert len(node.output_shapes) == 1
-                (b, s, h1) = node.input_shapes[0]
+                (s, b, h1) = node.input_shapes[0]
                 h2 = node.input_shapes[1][-1]
                 node.input_shapes[1] = torch.Size([h1, h2 // tp_size])
-                node.output_shapes[0] = torch.Size([b, s, h2 // tp_size])
+                node.output_shapes[0] = torch.Size([s, b, h2 // tp_size])
             
             elif node.layer_type == "baddbmm":    
                 # [b * num_heads, s, s] + [b * num_heads, s, head_dim] x [b * num_heads, head_dim, s]
@@ -247,9 +247,9 @@ def shard_compute_node_input_output_shapes(
                 # Row parallel linear
                 assert len(node.input_shapes) == 2
                 assert len(node.output_shapes) == 1
-                (b, s, h1) = node.input_shapes[0]
+                (s, b, h1) = node.input_shapes[0]
                 h2 = node.input_shapes[1][-1]
-                node.input_shapes[0] = torch.Size([b, s, h1 // tp_size])
+                node.input_shapes[0] = torch.Size([s, b, h1 // tp_size])
                 node.input_shapes[1] = torch.Size([h1 // tp_size, h2])
     
     return graph
@@ -413,7 +413,7 @@ def _infer_comm_node_input_output_shapes(
         input_shapes = output_shapes = prev_node.output_shapes
     elif primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "tp":
         # All-reduce the activation gradients (input) of previous node
-        assert len(prev_node.input_shapes[0]) == 3      # [b, s, h2]
+        assert len(prev_node.input_shapes[0]) == 3      # [s, b, h2]
         input_shapes = output_shapes = prev_node.input_shapes
     else:
         raise NotImplementedError("Unsupport case when inferring input/output shapes of communication node.")
@@ -436,13 +436,13 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
     
     bw_graph = IRGraph()
     for node in reversed(graph.nodes):
-        if node.layer_type == "gemm":   # [b, s, h1] x [h1, h2] -> [b, s, h2]
+        if node.layer_type == "gemm":   # [s, b, h1] x [h1, h2] -> [s, b, h2]
             assert len(node.input_shapes[0]) == len(node.output_shapes[0]) == 3
             assert len(node.input_shapes[1]) == 2
             (batch_size, seq_len, left_hidden_dim) = node.input_shapes[0]
             right_hidden_dim = node.input_shapes[1][-1]
 
-            # Input gradient: [b, s, h2] x [h2, h1] -> [b, s, h1]
+            # Input gradient: [s, b, h2] x [h2, h1] -> [s, b, h1]
             def __fake_bw_func_gemm_input_grad():
                 return None
 
@@ -453,10 +453,10 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_input_grad, "input_shapes", input_shapes_)
             setattr(bw_node_input_grad, "output_shapes", output_shapes_)
             setattr(bw_node_input_grad, "layer_type", "gemm")
-            setattr(bw_node_input_grad, "layout", "b:s:h2,h2:h1")
+            setattr(bw_node_input_grad, "layout", "s:b:h2,h2:h1")
             setattr(bw_node_input_grad, "fw_node", node)
 
-            # Weight gradient: [b, h1, s] x [b, s, h2] -> [b, h1, h2]
+            # Weight gradient: [s, h1, b] x [s, b, h2] -> [s, h1, h2]
             def __fake_bw_func_gemm_weight_grad():
                 return None
             
@@ -467,10 +467,10 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_weight_grad, "input_shapes", input_shapes_)
             setattr(bw_node_weight_grad, "output_shapes", output_shapes_)
             setattr(bw_node_weight_grad, "layer_type", "gemm")
-            setattr(bw_node_weight_grad, "layout", "b:h1:s,b:s:h2")
+            setattr(bw_node_weight_grad, "layout", "s:h1:b,s:b:h2")
             setattr(bw_node_weight_grad, "fw_node", node)
 
-            # Summing weight gradient dim0: [b, h1, h2] -> [h1, h2]
+            # Summing weight gradient dim0: [s, h1, h2] -> [h1, h2]
             def __fake_bw_func_gemm_weight_grad_reduce_sum():
                 return None
             
@@ -481,7 +481,7 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_weight_grad_reduce_sum, "input_shapes", input_shapes_)
             setattr(bw_node_weight_grad_reduce_sum, "output_shapes", output_shapes_)
             setattr(bw_node_weight_grad_reduce_sum, "layer_type", "reduce_sum")
-            setattr(bw_node_weight_grad_reduce_sum, "layout", "b:h1:h2")
+            setattr(bw_node_weight_grad_reduce_sum, "layout", "s:h1:h2")
             setattr(bw_node_weight_grad_reduce_sum, "fw_node", node)
 
         elif node.layer_type == "bmm":  # [b, s, s] x [b, s, h1] -> [b, s, h1]

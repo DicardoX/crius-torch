@@ -70,7 +70,7 @@ class TorchModelProfileTest(unittest.TestCase):
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
     """
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -103,9 +103,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="reduce_sum")
 
         offline_profiler.profile(opcode="all_reduce")
-        
-
-    @unittest.skip("Pass.")
+    
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -270,6 +269,7 @@ class TorchModelProfileTest(unittest.TestCase):
             base_input_args=input_args,
             base_input_kwargs=input_kwargs,
             partition_pipeline_stages_func=CriusParallelPlanner.partition_pipeline_stages,
+            check_oom=False,
         )
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
@@ -437,9 +437,9 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
 
         # Init distributed

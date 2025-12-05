@@ -78,13 +78,14 @@ class OfflineDataRecorder:
     ) -> str:
         """ Generate a unique query key for a computation or communication operation. """
 
-        if   op_type == "gemm":
+        if op_type == "gemm":
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif op_type == "bmm":
             assert right_op_hidden_dim is None
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif op_type == "reduce_sum":
-            assert seq_len is None
+            assert batch_size is None, \
+                f"The shape of reduce_sum op should be (seq_len, left_hidden_dim, right_hidden_dim), thus batch_size is None."
             return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif op_type == "baddbmm":
             assert right_op_hidden_dim is None
@@ -92,7 +93,7 @@ class OfflineDataRecorder:
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{op_type}_n{comm_node_num}_gs{comm_group_size}_d{comm_data_size}"
-        
+    
     @overload
     def _check_cache(
         self, 

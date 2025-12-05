@@ -56,7 +56,8 @@ class OfflineProfileConfigs:
 
     gemm_layouts: List[str] = field(
         default_factory=lambda: [
-            "b:s:h1,h1:h2", 
+            "b:s:h1,h1:h2",
+            "s:b:h1,h1:h2",     # Used in Megatron
             "b:s:h2,h2:h1",
             "b:h1:s,b:s:h2",
         ]
@@ -316,6 +317,12 @@ class CriusOfflineDataManager:
                                     (bs, seq_len, left_hidden_dim),
                                     (left_hidden_dim, right_hidden_dim),
                                     (bs, seq_len, right_hidden_dim),
+                                ]
+                            elif layout == "s:b:h1,h1:h2":
+                                shapes = [
+                                    (seq_len, bs, left_hidden_dim),
+                                    (left_hidden_dim, right_hidden_dim),
+                                    (seq_len, bs, right_hidden_dim),
                                 ]
                             elif layout == "b:s:h2,h2:h1":
                                 shapes = [
