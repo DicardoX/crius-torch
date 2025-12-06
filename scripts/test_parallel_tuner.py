@@ -103,14 +103,14 @@ class ParallelTuneTest(unittest.TestCase):
             },
             "all_reduce:dp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',
             },
             "all_reduce:tp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
                 "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
                 "pass": 'backward',

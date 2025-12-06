@@ -76,20 +76,30 @@ class TorchModelProfileTest(unittest.TestCase):
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
-            min_batch_size=1,
+            min_batch_size=4,
             max_batch_size=4,
             batch_size_step="power-of-2",
-            min_seq_len=32,
+            min_seq_len=2048,
             max_seq_len=2048,
             seq_len_step="power-of-2",
-            gemm_left_op_hidden_dims=[4096, ],
-            gemm_right_op_hidden_dims=[4096, ],
+            gemm_left_op_hidden_dims=[      # Only consider forward ops
+                2048, 4096, 8192,
+            ],
+            gemm_right_op_hidden_dims=[
+                2048, 4096, 6144, 12288, 8192, 16384, 25000,
+            ],
+            bmm_op_hidden_dims=[
+                64, 128, 
+            ],
+            baddbmm_op_hidden_dims=[
+                64, 128,
+            ],
             comm_data_sizes = [2**i for i in range(1,31)],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
@@ -97,12 +107,11 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        # offline_profiler.profile(opcode="gemm")
-        # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
-        # offline_profiler.profile(opcode="reduce_sum")
+        offline_profiler.profile(opcode="gemm")
+        offline_profiler.profile(opcode="bmm")
+        offline_profiler.profile(opcode="baddbmm")
 
-        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="all_reduce")
     
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -138,8 +147,8 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -187,14 +196,14 @@ class TorchModelProfileTest(unittest.TestCase):
             },
             "all_reduce:dp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',
             },
             "all_reduce:tp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
                 "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
                 "pass": 'backward',
@@ -206,6 +215,7 @@ class TorchModelProfileTest(unittest.TestCase):
         initialize_virtual_distributed(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            data_parallel_size=global_configs.data_parallel_size,
             init_cpu_process_group=True,
         )
         model_parallel_cuda_manual_seed(1234)
@@ -821,14 +831,14 @@ class TorchModelProfileTest(unittest.TestCase):
             },
             "all_reduce:dp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "interval": 1,
                 "pass": 'backward',
                 "parallelism": 'dp',
             },
             "all_reduce:tp:backward": {
                 "after_markers": [],
-                "after_nodes": ['weight_grad_reduce_sum', ],
+                "after_nodes": ['weight_grad', ],
                 "skip_first_n": 4,  # Addition 1 gemm before and after transformer layer loop
                 "interval": 4,      # Each transformer layer's gemm: qkv, out proj, mlp-fc1, mlp-fc2
                 "pass": 'backward',

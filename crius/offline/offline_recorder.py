@@ -83,10 +83,6 @@ class OfflineDataRecorder:
         elif op_type == "bmm":
             assert right_op_hidden_dim is None
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "reduce_sum":
-            assert batch_size is None, \
-                f"The shape of reduce_sum op should be (seq_len, left_hidden_dim, right_hidden_dim), thus batch_size is None."
-            return f"{op_type}_b{batch_size}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
         elif op_type == "baddbmm":
             assert right_op_hidden_dim is None
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"

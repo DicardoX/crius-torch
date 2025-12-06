@@ -363,7 +363,7 @@ def _insert_comm_primitives_into_graph_impl(
                 if node.layer_type == comm_primitive:
                     continue    # Just inserted
 
-                assert node.layer_type in ("gemm", "reduce_sum", "bmm", "baddbmm", ), f"Invalid node layer type in backward graph: {node.layer_type}"
+                assert node.layer_type in ("gemm", "bmm", "baddbmm", ), f"Invalid node layer type in backward graph: {node.layer_type}"
                 for after_node_keyword in after_nodes:
                     if after_node_keyword not in str(node.target):
                         continue
@@ -413,7 +413,10 @@ def _infer_comm_node_input_output_shapes(
         input_shapes = output_shapes = prev_node.output_shapes
     elif primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "tp":
         # All-reduce the activation gradients (input) of previous node
-        assert len(prev_node.input_shapes[0]) == 3      # [s, b, h2]
+        assert (
+            len(prev_node.input_shapes[1]) == 3 or      # [s, b, h2]
+            len(prev_node.input_shapes[1]) == 2         # [s*b, h2]
+        )
         input_shapes = output_shapes = prev_node.input_shapes
     else:
         raise NotImplementedError("Unsupport case when inferring input/output shapes of communication node.")
@@ -422,7 +425,7 @@ def _infer_comm_node_input_output_shapes(
 
 
 def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
-    """ Construct backward IR graph with only GEMM and communication operators. 
+    """ Construct backward IR graph with only heavy operators (e.g., GEMM) and communication operators. 
     
     Args:
         graph: Forward IR graph that has been shape-propogated and inserted communication operators.
@@ -456,33 +459,36 @@ def construct_backward_graph(graph: IRGraph, mode: str = "manual") -> IRGraph:
             setattr(bw_node_input_grad, "layout", "s:b:h2,h2:h1")
             setattr(bw_node_input_grad, "fw_node", node)
 
-            # Weight gradient: [s, h1, b] x [s, b, h2] -> [s, h1, h2]
+            # Weight gradient: grad_weight = input^T @ grad_output
+            # Intuitively, the shapes should be: 
+            #                   [s, h1, b] x [s, b, h2] -> [s, h1, h2]
+            # To avoid extremely large intermediate tensor [s, h1, h2], the common practice is to merge s and b
+            # dimensions, transforming input and grad_output into 2D tensors. Therefore, the shapes become: 
+            #                   [h1, s*b] x [s*b, h2] -> [h1, h2]
+            # For example, Megatron performs such transformation in 
+            # `LinearWithGradAccumulationAndAsyncCommunication` (`prepare_input_tensors_for_wgrad_compute()` 
+            # in megatron/core/utils.py):
+            # 
+            #       # Convert the tensor shapes to 2D for execution compatibility
+            #       if grad_output.dim() == 3:
+            #           grad_output = grad_output.view(
+            #               grad_output.shape[0] * grad_output.shape[1], grad_output.shape[2]
+            #           )
+            #           all_gathered_input = all_gathered_input.view(
+            #               all_gathered_input.shape[0] * all_gathered_input.shape[1], all_gathered_input.shape[2]
+            #           )
             def __fake_bw_func_gemm_weight_grad():
                 return None
             
             bw_node_weight_grad = bw_graph.create_node(op="call_function", target=__fake_bw_func_gemm_weight_grad)
-            input_shapes_ = [torch.Size([batch_size, left_hidden_dim, seq_len]), torch.Size([batch_size, seq_len, right_hidden_dim])]
-            output_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
+            input_shapes_ = [torch.Size([left_hidden_dim, seq_len*batch_size]), torch.Size([seq_len*batch_size, right_hidden_dim])]
+            output_shapes_ = [torch.Size([left_hidden_dim, right_hidden_dim])]
             setattr(bw_node_weight_grad, "node_pass", "backward")
             setattr(bw_node_weight_grad, "input_shapes", input_shapes_)
             setattr(bw_node_weight_grad, "output_shapes", output_shapes_)
             setattr(bw_node_weight_grad, "layer_type", "gemm")
-            setattr(bw_node_weight_grad, "layout", "s:h1:b,s:b:h2")
+            setattr(bw_node_weight_grad, "layout", "h1:s*b,s*b:h2")
             setattr(bw_node_weight_grad, "fw_node", node)
-
-            # Summing weight gradient dim0: [s, h1, h2] -> [h1, h2]
-            def __fake_bw_func_gemm_weight_grad_reduce_sum():
-                return None
-            
-            bw_node_weight_grad_reduce_sum = bw_graph.create_node(op="call_function", target=__fake_bw_func_gemm_weight_grad_reduce_sum)
-            input_shapes_ = [torch.Size([batch_size, left_hidden_dim, right_hidden_dim])]
-            output_shapes_ = [torch.Size([left_hidden_dim, right_hidden_dim])]
-            setattr(bw_node_weight_grad_reduce_sum, "node_pass", "backward")
-            setattr(bw_node_weight_grad_reduce_sum, "input_shapes", input_shapes_)
-            setattr(bw_node_weight_grad_reduce_sum, "output_shapes", output_shapes_)
-            setattr(bw_node_weight_grad_reduce_sum, "layer_type", "reduce_sum")
-            setattr(bw_node_weight_grad_reduce_sum, "layout", "s:h1:h2")
-            setattr(bw_node_weight_grad_reduce_sum, "fw_node", node)
 
         elif node.layer_type == "bmm":  # [b, s, s] x [b, s, h1] -> [b, s, h1]
             assert len(node.input_shapes[0]) == len(node.input_shapes[1]) == len(node.output_shapes[0]) == 3

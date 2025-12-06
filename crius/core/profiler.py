@@ -101,7 +101,7 @@ class CriusDistProfiler:
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
             if node.layer_type in (
-                "gemm", "reduce_sum", "bmm", "baddbmm", 
+                "gemm", "bmm", "baddbmm", 
                 "all_reduce", "all_gather", "all_to_all", "reduce_scatter", 
             ):
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
@@ -133,6 +133,18 @@ class CriusDistProfiler:
     def _query_operator_latencies_ms(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: IRGraph = None):
         """ Query operator latencies(ms) from offline profiled data. """
 
+        for node in graph.nodes:
+            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
+                print(node.layer_type, node.layout, node.input_shapes)
+        print("\n\n\n\n\n")
+        for node in bw_graph.nodes:
+            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
+                print(node.layer_type, node.layout, node.input_shapes)
+        
+        # TODO(chunyu): Refine phrase layout for 'h1:s*b,s*b:h2' in query_one_graph.
+
+        exit(0)
+
         def __query_one_graph(graph_): 
             for node in graph_.nodes:
                 if (
@@ -154,7 +166,7 @@ class CriusDistProfiler:
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
-                        elif node.layer_type in ("gemm", "reduce_sum", "bmm", "baddbmm", ):
+                        elif node.layer_type in ("gemm", "bmm", "baddbmm", ):
                             assert getattr(node, "layout", None) is not None
                             layout = [l.split(":") for l in node.layout.split(",")]
                             batch_size_indices = self._get_one_dim_index("b", layout)

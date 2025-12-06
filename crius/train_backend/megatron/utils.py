@@ -26,7 +26,7 @@ __all__ = [
 
 def initialize_virtual_distributed(
     tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1,
-    num_nodes: int = 1, num_devices_per_node: int = 1,
+    data_parallel_size: int = 1, num_nodes: int = 1, num_devices_per_node: int = 1,
     init_cpu_process_group: bool = True,
 ):
     """ Initialize a virtual Megatron backend without ALL underlying physical deivces. 
@@ -41,6 +41,7 @@ def initialize_virtual_distributed(
     Args:
         tensor_model_parallel_size: Degree of tensor model parallelism.
         pipeline_model_parallel_size: Degree of pipeline model parallelism.
+        data_parallel_size: Degree of data parallelism.
         num_nodes: Number of virtual nodes allocated for the training task.
         num_devices_per_node: Number of virtual devices per node.
         init_cpu_process_group: Whether to initialize a multi-process CPU process group.
@@ -49,7 +50,7 @@ def initialize_virtual_distributed(
     assert init_cpu_process_group
     torchrun_world_size = int(os.environ['WORLD_SIZE'])
     assert torchrun_world_size == max(
-        tensor_model_parallel_size * pipeline_model_parallel_size, 
+        tensor_model_parallel_size * pipeline_model_parallel_size * data_parallel_size, 
         num_nodes * num_devices_per_node,
     ), f"The world size of torchrun ({torchrun_world_size}) is not properly set."
     rank = int(os.environ['LOCAL_RANK'])

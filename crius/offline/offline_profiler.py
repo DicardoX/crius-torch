@@ -56,10 +56,10 @@ class OfflineProfileConfigs:
 
     gemm_layouts: List[str] = field(
         default_factory=lambda: [
-            "b:s:h1,h1:h2",
+            # "b:s:h1,h1:h2",
             "s:b:h1,h1:h2",     # Used in Megatron
-            "b:s:h2,h2:h1",
-            "b:h1:s,b:s:h2",
+            "s:b:h2,h2:h1",
+            "h1:s*b,s*b:h2",
         ]
     )
     """ Candidate layouts of GEMM operations. """
@@ -91,22 +91,6 @@ class OfflineProfileConfigs:
         ]
     )
     """ Candidate layouts of BADDBMM operations. """
-
-    # REDUCE_SUM
-    reduce_sum_op_func: Callable = torch.sum
-
-    reduce_sum_left_op_hidden_dims:  List[int] = None
-    """ Candidate hidden dimensions of the left operand in REDUCE_SUM operations. """
-
-    reduce_sum_right_op_hidden_dims: List[int] = None
-    """ Candidate hidden dimensions of the right operand in REDUCE_SUM operations. """
-
-    reduce_sum_layouts: List[str] = field(
-        default_factory=lambda: [
-            "b:h1:h2", 
-        ]
-    )
-    """ Candidate layouts of REDUCE_SUM operations. """
 
     # Communication
     allreduce_op_func: Callable = torch.distributed.all_reduce
@@ -145,10 +129,6 @@ class OfflineProfileConfigs:
             self.bmm_op_hidden_dims = [128, 256, 512, 1024]
         if self.baddbmm_op_hidden_dims is None:
             self.baddbmm_op_hidden_dims = [128, 256, 512, 1024]
-        if self.reduce_sum_left_op_hidden_dims is None:
-            self.reduce_sum_left_op_hidden_dims = [128, 256, 512, 1024]
-        if self.reduce_sum_right_op_hidden_dims is None:
-            self.reduce_sum_right_op_hidden_dims = [128, 256, 512, 1024]
 
         assert isinstance(self.batch_size_step, (int, str)), "batch_size_step must be an integer or 'power-of-2'."
         assert isinstance(self.seq_len_step, (int, str)), "seq_len_step must be an integer or 'power-of-2'."
@@ -228,13 +208,6 @@ class CriusOfflineDataManager:
                 self.configs.baddbmm_op_hidden_dims,
             ]
             profile_func = self._profile_all_baddbmm
-        elif opcode == "reduce_sum":
-            op_func = self.configs.reduce_sum_op_func
-            dims_collection = [
-                self.configs.reduce_sum_left_op_hidden_dims,
-                self.configs.reduce_sum_right_op_hidden_dims,
-            ]
-            profile_func = self._profile_all_reduce_sum
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
         
@@ -261,11 +234,6 @@ class CriusOfflineDataManager:
             right_op = torch.randn(shapes[2], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
             args = (left_op, mid_op, right_op, )
-        elif opcode == "reduce_sum":
-            dim = 0     # FIXME(chunyu): Currently fixed.
-            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
-            result_op = torch.zeros(shapes[1], dtype=dtype, device=device)
-            args = (left_op, 0, )
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype).cuda()
             if opcode == "all_reduce":
@@ -439,41 +407,6 @@ class CriusOfflineDataManager:
                                     f"hd: {hidden_dim}, latency (ms): {op_latency}")
                         self.recorder.write_one_entry(query_key, op_latency, None)
     
-    def _profile_all_reduce_sum(
-        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
-        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
-    ) -> None:
-        for bs in batch_sizes:
-            for left_hidden_dim in dims_collection[0]:
-                for right_hidden_dim in dims_collection[1]:
-                    for layout in self.configs.reduce_sum_layouts:
-                        if layout == "b:h1:h2":
-                            shapes = [
-                                (bs, left_hidden_dim, right_hidden_dim),
-                                (left_hidden_dim, right_hidden_dim),
-                            ]
-
-                        query_key = OfflineDataRecorder.get_query_key(
-                            "reduce_sum", bs, None, left_hidden_dim, right_hidden_dim, layout,
-                        )
-                        if query_key in self.recorder.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached reduce_sum profile: layout: {layout}, batch_size: {bs}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}")
-                            continue
-                        
-                        # Reset
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
-
-                        op_latency = self._benchmark_one_op(
-                            opcode="reduce_sum", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
-                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
-                        )
-                        logger.info(f"==========> reduce_sum profile: layout: {layout}, batch_size: {bs}, " + 
-                                    f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
-                        self.recorder.write_one_entry(query_key, op_latency, None)
-
     def _profile_communication(
         self, opcode: str,
     ) -> None:
