@@ -72,19 +72,32 @@ class OfflineDataRecorder:
         left_op_hidden_dim: int,
         right_op_hidden_dim: int, 
         layout: str,
+        num_attn_heads: int = 1,
         comm_node_num: int = 1,
         comm_group_size: int = 1, 
-        comm_data_size: int = 1
+        comm_data_size: int = 1,
+        attn_head_split: bool = True,
     ) -> str:
-        """ Generate a unique query key for a computation or communication operation. """
+        """ Generate a unique query key for a computation or communication operation. 
+        
+        Args:
+            attn_head_split (bool): Split attention heads and accumulate num_attn_heads to batch dimension. 
+                Set to false if the attention head has already been splitted (e.g., shapes got from IR graph).
+        """
 
         if op_type == "gemm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "bmm":
+            if "*" not in layout:
+                return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+            else:
+                # Batch size and sequence length dimensions are merged (used in weight gradient computation)
+                if batch_size > 1:
+                    seq_len *= batch_size   # Accumulated
+                return f"{op_type}_b*s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout_[{layout}]"
+        elif op_type in ("bmm", "baddbmm"):
             assert right_op_hidden_dim is None
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "baddbmm":
-            assert right_op_hidden_dim is None
+            if attn_head_split:
+                batch_size *= num_attn_heads
+                left_op_hidden_dim = left_op_hidden_dim // num_attn_heads
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."

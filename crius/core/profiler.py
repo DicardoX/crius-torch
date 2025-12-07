@@ -133,18 +133,6 @@ class CriusDistProfiler:
     def _query_operator_latencies_ms(self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: IRGraph = None):
         """ Query operator latencies(ms) from offline profiled data. """
 
-        for node in graph.nodes:
-            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
-                print(node.layer_type, node.layout, node.input_shapes)
-        print("\n\n\n\n\n")
-        for node in bw_graph.nodes:
-            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
-                print(node.layer_type, node.layout, node.input_shapes)
-        
-        # TODO(chunyu): Refine phrase layout for 'h1:s*b,s*b:h2' in query_one_graph.
-
-        exit(0)
-
         def __query_one_graph(graph_): 
             for node in graph_.nodes:
                 if (
@@ -157,6 +145,9 @@ class CriusDistProfiler:
                         input_shapes, output_shapes = node.input_shapes, node.output_shapes
                         batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, layout = None, None, None, None, None
                         comm_group_size, comm_data_size = None, None
+                        assert parallelism_plan.num_attn_heads % parallelism_plan.tensor_parallel_degree == 0, \
+                            f"The number of attention heads should be divisible by TP size."
+                        num_attn_heads_per_rank = parallelism_plan.num_attn_heads // parallelism_plan.tensor_parallel_degree
 
                         if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
                             if node.node_parallelism is None:
@@ -174,26 +165,38 @@ class CriusDistProfiler:
                             left_op_hidden_dim_indices = self._get_one_dim_index("h1", layout)
                             right_op_hidden_dim_indices = self._get_one_dim_index("h2", layout)
 
-                            batch_size = input_shapes[batch_size_indices[0]][batch_size_indices[1]] \
-                                if batch_size_indices is not None else None
-                            seq_len = input_shapes[seq_len_indices[0]][seq_len_indices[1]] \
-                                if seq_len_indices is not None else None
-                            left_op_hidden_dim = input_shapes[left_op_hidden_dim_indices[0]][left_op_hidden_dim_indices[1]] \
-                                if left_op_hidden_dim_indices is not None else None
-                            right_op_hidden_dim = input_shapes[right_op_hidden_dim_indices[0]][right_op_hidden_dim_indices[1]] \
-                                if right_op_hidden_dim_indices is not None else None
+                            if "*" not in node.layout:
+                                batch_size = input_shapes[batch_size_indices[0]][batch_size_indices[1]] \
+                                    if batch_size_indices is not None else None
+                                seq_len = input_shapes[seq_len_indices[0]][seq_len_indices[1]] \
+                                    if seq_len_indices is not None else None
+                                left_op_hidden_dim = input_shapes[left_op_hidden_dim_indices[0]][left_op_hidden_dim_indices[1]] \
+                                    if left_op_hidden_dim_indices is not None else None
+                                right_op_hidden_dim = input_shapes[right_op_hidden_dim_indices[0]][right_op_hidden_dim_indices[1]] \
+                                    if right_op_hidden_dim_indices is not None else None
+                            else:
+                                # Hardcoded when has merged dimensions (e.g., "h1:s*b,s*b:h2")
+                                if node.layout == "h1:s*b,s*b:h2":
+                                    assert len(input_shapes[0]) == len(input_shapes[1]) == 2
+                                    batch_size = 1
+                                    seq_len = input_shapes[0][1]    # Accumulated
+                                    left_op_hidden_dim = input_shapes[0][0]
+                                    right_op_hidden_dim = input_shapes[1][1]
+                                else:
+                                    raise ValueError(f"Unsupported hardcoded node layout: {node.layout}")
                         
                         else:
                             logger.warning(f"Ignored node type {node.layer_type} in latency query.")
+                        
                         query_key = OfflineDataRecorder.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
-                            node.layout, comm_group_size, comm_data_size,
+                            node.layout, num_attn_heads_per_rank, comm_group_size, comm_data_size, attn_head_split=False,
                         )
 
-                        if query_key in self._profiled_data:
+                        if node.layer_type in ("bmm", "baddbmm"):
                             print(query_key)
-                            exit(0)
-                            
+
+                        if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
                         else:
                             logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
@@ -206,6 +209,16 @@ class CriusDistProfiler:
         __query_one_graph(graph)
         if bw_graph is not None:
             __query_one_graph(bw_graph)
+
+        for node in graph.nodes:
+            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
+                print(node.layer_type, node.layout, node.input_shapes, node.latency)
+        print("\n\n\n\n\n")
+        for node in bw_graph.nodes:
+            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
+                print(node.layer_type, node.layout, node.input_shapes, node.latency)
+
+        exit(0)
 
         return graph, bw_graph
     

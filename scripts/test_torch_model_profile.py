@@ -89,10 +89,10 @@ class TorchModelProfileTest(unittest.TestCase):
                 2048, 4096, 6144, 12288, 8192, 16384, 25000,
             ],
             bmm_op_hidden_dims=[
-                64, 128, 
+                2048, 4096, 8192,
             ],
             baddbmm_op_hidden_dims=[
-                64, 128,
+                2048, 4096, 8192,
             ],
             comm_data_sizes = [2**i for i in range(1,31)],
             dtype=torch.float16,
@@ -174,6 +174,7 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_type="1f1b",
             pipeline_parallel_degree=global_configs.pipeline_model_parallel_size,
             num_layers=num_layers,
+            num_attn_heads=num_attention_heads,
             num_microbatches=num_micro_batches,
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,

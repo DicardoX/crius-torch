@@ -79,6 +79,12 @@ class OfflineProfileConfigs:
     )
     """ Candidate layouts of BMM operations. """ 
 
+    num_attn_heads_per_rank: List[int] = field(
+        default_factory=lambda: [2**i for i in range(0,6)]
+    )
+    """ Candidate number of attention heads per rank, useful for bmm and baddbmm 
+    as they accumulate batch dimension as `bs * num_attn_heads_per_rank`. """
+
     # BADDBMM
     baddbmm_op_func: Callable = torch.baddbmm
     
@@ -177,7 +183,7 @@ class CriusOfflineDataManager:
             batch_sizes = [
                 2**i for i in range(int(self.configs.min_batch_size).bit_length() - 1, 
                                     int(self.configs.max_batch_size).bit_length())
-            ]   
+            ]
         else:
             raise ValueError(f"Invalid batch size step: {self.configs.batch_size_step}")
         
@@ -212,8 +218,7 @@ class CriusOfflineDataManager:
             raise ValueError(f"Invalid opcode: {opcode}")
         
         args = (
-            op_func, dims_collection, batch_sizes, seq_lens, num_warmup_steps, 
-            num_profile_steps, dtype, device,
+            op_func, batch_sizes, seq_lens, dtype, device,
         )
         profile_func(*args)
         self.recorder.store()
@@ -272,38 +277,39 @@ class CriusOfflineDataManager:
         return op_latency
 
     def _profile_all_gemm(
-        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
-        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
     ) -> None:
         for bs in batch_sizes:
             for seq_len in seq_lens:
-                for left_hidden_dim in dims_collection[0]:
-                    for right_hidden_dim in dims_collection[1]:
+                for left_hidden_dim in self.configs.gemm_left_op_hidden_dims:
+                    for right_hidden_dim in self.configs.gemm_right_op_hidden_dims:
                         for layout in self.configs.gemm_layouts:
-                            if layout == "b:s:h1,h1:h2":
-                                shapes = [
-                                    (bs, seq_len, left_hidden_dim),
-                                    (left_hidden_dim, right_hidden_dim),
-                                    (bs, seq_len, right_hidden_dim),
-                                ]
-                            elif layout == "s:b:h1,h1:h2":
+                            # if layout == "b:s:h1,h1:h2":
+                            #     shapes = [
+                            #         (bs, seq_len, left_hidden_dim),
+                            #         (left_hidden_dim, right_hidden_dim),
+                            #         (bs, seq_len, right_hidden_dim),
+                            #     ]
+                            if layout == "s:b:h1,h1:h2":
                                 shapes = [
                                     (seq_len, bs, left_hidden_dim),
                                     (left_hidden_dim, right_hidden_dim),
                                     (seq_len, bs, right_hidden_dim),
                                 ]
-                            elif layout == "b:s:h2,h2:h1":
+                            elif layout == "s:b:h2,h2:h1":
                                 shapes = [
                                     (bs, seq_len, right_hidden_dim),
                                     (right_hidden_dim, left_hidden_dim),
                                     (bs, seq_len, left_hidden_dim),
                                 ]
-                            elif layout == "b:h1:s,b:s:h2":
+                            elif layout == "h1:s*b,s*b:h2":
                                 shapes = [
-                                    (bs, left_hidden_dim, seq_len),
-                                    (bs, seq_len, right_hidden_dim),
-                                    (bs, left_hidden_dim, right_hidden_dim),
+                                    (left_hidden_dim, seq_len * bs),
+                                    (seq_len * bs, right_hidden_dim),
+                                    (left_hidden_dim, right_hidden_dim),
                                 ]
+                            else:
+                                raise ValueError(f"Unsupport GEMM layout: {layout}")
 
                             query_key = OfflineDataRecorder.get_query_key(
                                 "gemm", bs, seq_len, left_hidden_dim, right_hidden_dim, layout,
@@ -319,93 +325,101 @@ class CriusOfflineDataManager:
                             torch.cuda.synchronize()
 
                             op_latency = self._benchmark_one_op(
-                                opcode="gemm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
-                                num_profile_steps=num_profile_steps, dtype=dtype, device=device,
+                                opcode="gemm", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                                num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
                             )
                             logger.info(f"==========> GEMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
                                         f"left_hd: {left_hidden_dim}, right_hd: {left_hidden_dim}, latency (ms): {op_latency}")
                             self.recorder.write_one_entry(query_key, op_latency, None)
     
     def _profile_all_bmm(
-        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
-        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
     ) -> None:
         for bs in batch_sizes:
             for seq_len in seq_lens:
-                for hidden_dim in dims_collection[0]:
+                for hidden_dim in self.configs.bmm_op_hidden_dims:
                     for layout in self.configs.bmm_layouts:
-                        if layout == "b:s:h1,b:h1:s":
-                            shapes = [
-                                (bs, seq_len, hidden_dim),
-                                (bs, hidden_dim, seq_len),
-                                (bs, seq_len, seq_len),
-                            ]
-                        elif layout == "b:s:s,b:s:h1":
-                            shapes = [
-                                (bs, seq_len, seq_len),
-                                (bs, seq_len, hidden_dim),
-                                (bs, seq_len, hidden_dim),
-                            ]
-                        elif layout == "b:h1:s,b:s:s":
-                            shapes = [
-                                (bs, hidden_dim, seq_len),
-                                (bs, seq_len, seq_len),
-                                (bs, hidden_dim, seq_len),
-                            ]
+                        for num_attn_heads in self.configs.num_attn_heads_per_rank:
+                            if layout == "b:s:h1,b:h1:s":
+                                shapes = [
+                                    (bs * num_attn_heads, seq_len, hidden_dim // num_attn_heads),
+                                    (bs * num_attn_heads, hidden_dim // num_attn_heads, seq_len),
+                                    (bs * num_attn_heads, seq_len, seq_len),
+                                ]
+                            elif layout == "b:s:s,b:s:h1":
+                                shapes = [
+                                    (bs * num_attn_heads, seq_len, seq_len),
+                                    (bs * num_attn_heads, seq_len, hidden_dim // num_attn_heads),
+                                    (bs * num_attn_heads, seq_len, hidden_dim // num_attn_heads),
+                                ]
+                            elif layout == "b:h1:s,b:s:s":
+                                shapes = [
+                                    (bs * num_attn_heads, hidden_dim // num_attn_heads, seq_len),
+                                    (bs * num_attn_heads, seq_len, seq_len),
+                                    (bs * num_attn_heads, hidden_dim // num_attn_heads, seq_len),
+                                ]
+                            else:
+                                raise ValueError(f"Unsupport BMM layout: {layout}")
 
-                        query_key = OfflineDataRecorder.get_query_key("bmm", bs, seq_len, hidden_dim, None, layout)
-                        if query_key in self.recorder.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached BMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"hd: {hidden_dim}")
-                            continue
-                        
-                        # Reset
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
+                            query_key = OfflineDataRecorder.get_query_key(
+                                "bmm", bs, seq_len, hidden_dim, None, layout, num_attn_heads,
+                            )
+                            if query_key in self.recorder.data and not self.configs.force_overwrite:
+                                logger.info(f"Cached BMM profile: layout: {layout}, batch_size: {bs * num_attn_heads}, " + 
+                                            f"seq_len: {seq_len}, hd: {hidden_dim // num_attn_heads}")
+                                continue
+                            
+                            # Reset
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
 
-                        op_latency = self._benchmark_one_op(
-                            opcode="bmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
-                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
-                        )
-                        logger.info(f"==========> BMM profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                    f"hd: {hidden_dim}, latency (ms): {op_latency}")
-                        self.recorder.write_one_entry(query_key, op_latency, None)
+                            op_latency = self._benchmark_one_op(
+                                opcode="bmm", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                                num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                            )
+                            logger.info(f"==========> BMM profile: layout: {layout}, batch_size: {bs * num_attn_heads}, " + 
+                                        f"seq_len: {seq_len}, hd: {hidden_dim // num_attn_heads}, latency (ms): {op_latency}")
+                            self.recorder.write_one_entry(query_key, op_latency, None)
     
     def _profile_all_baddbmm(
-        self, op_func: Callable, dims_collection: List[List[int]], batch_sizes: List[int], 
-        seq_lens: List[int], num_warmup_steps: int, num_profile_steps: int, dtype, device, 
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
     ) -> None:
         for bs in batch_sizes:
             for seq_len in seq_lens:
-                for hidden_dim in dims_collection[0]:
+                for hidden_dim in self.configs.baddbmm_op_hidden_dims:
                     for layout in self.configs.baddbmm_layouts:
-                        if layout == "b:s:s,b:s:h1,b:h1:s":
-                            shapes = [
-                                (bs, seq_len, seq_len),
-                                (bs, seq_len, hidden_dim),
-                                (bs, hidden_dim, seq_len),
-                                (bs, seq_len, seq_len),
-                            ]
+                        for num_attn_heads in self.configs.num_attn_heads_per_rank:
+                            if layout == "b:s:s,b:s:h1,b:h1:s":
+                                shapes = [
+                                    (bs * num_attn_heads, seq_len, seq_len),
+                                    (bs * num_attn_heads, seq_len, hidden_dim // num_attn_heads),
+                                    (bs * num_attn_heads, hidden_dim // num_attn_heads, seq_len),
+                                    (bs * num_attn_heads, seq_len, seq_len),
+                                ]
+                            else:
+                                raise ValueError(f"Unsupport BADDBMM layout: {layout}")
 
-                        query_key = OfflineDataRecorder.get_query_key("baddbmm", bs, seq_len, hidden_dim, None, layout)
-                        if query_key in self.recorder.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached baddbmm profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                        f"hd: {hidden_dim}")
-                            continue
-                        
-                        # Reset
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
+                            query_key = OfflineDataRecorder.get_query_key(
+                                "baddbmm", bs, seq_len, hidden_dim, None, layout, num_attn_heads,
+                            )
+                            if query_key in self.recorder.data and not self.configs.force_overwrite:
+                                logger.info(f"Cached baddbmm profile: layout: {layout}, batch_size: {bs * num_attn_heads}, " + 
+                                            f"seq_len: {seq_len}, hd: {hidden_dim // num_attn_heads}")
+                                continue
+                            
+                            # Reset
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
 
-                        op_latency = self._benchmark_one_op(
-                            opcode="baddbmm", op_func=op_func, shapes=shapes, num_warmup_steps=num_warmup_steps, 
-                            num_profile_steps=num_profile_steps, dtype=dtype, device=device,
-                        )
-                        logger.info(f"==========> baddbmm profile: layout: {layout}, batch_size: {bs}, seq_len: {seq_len}, " + 
-                                    f"hd: {hidden_dim}, latency (ms): {op_latency}")
-                        self.recorder.write_one_entry(query_key, op_latency, None)
+                            op_latency = self._benchmark_one_op(
+                                opcode="baddbmm", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                                num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                            )
+                            logger.info(f"==========> baddbmm profile: layout: {layout}, batch_size: {bs * num_attn_heads}, " + 
+                                        f"seq_len: {seq_len}, hd: {hidden_dim // num_attn_heads}, latency (ms): {op_latency}")
+                            self.recorder.write_one_entry(query_key, op_latency, None)
     
     def _profile_communication(
         self, opcode: str,

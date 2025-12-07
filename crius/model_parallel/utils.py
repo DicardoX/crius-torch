@@ -27,6 +27,9 @@ class ParallelismPlan:
     num_layers: int = 1
     """ Number of transformer layers in the LLM model. """
 
+    num_attn_heads: int = 1
+    """ Number of attention heads in the LLM model. """
+
     num_microbatches: int = 1
     """ Number of microbatches in pipeline parallelism. """
 
