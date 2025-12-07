@@ -73,7 +73,7 @@ class OfflineDataRecorder:
         right_op_hidden_dim: int, 
         layout: str,
         num_attn_heads: int = 1,
-        comm_node_num: int = 1,
+        num_comm_nodes: int = 1,
         comm_group_size: int = 1, 
         comm_data_size: int = 1,
         attn_head_split: bool = True,
@@ -101,7 +101,7 @@ class OfflineDataRecorder:
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{op_type}_n{comm_node_num}_gs{comm_group_size}_d{comm_data_size}"
+            return f"{op_type}_n{num_comm_nodes}_gs{comm_group_size}_d{comm_data_size}"
     
     @overload
     def _check_cache(

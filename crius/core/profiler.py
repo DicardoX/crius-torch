@@ -190,11 +190,9 @@ class CriusDistProfiler:
                         
                         query_key = OfflineDataRecorder.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
-                            node.layout, num_attn_heads_per_rank, comm_group_size, comm_data_size, attn_head_split=False,
+                            node.layout, num_attn_heads_per_rank, global_configs.num_nodes, comm_group_size, 
+                            comm_data_size, attn_head_split=False,
                         )
-
-                        if node.layer_type in ("bmm", "baddbmm"):
-                            print(query_key)
 
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
@@ -210,14 +208,9 @@ class CriusDistProfiler:
         if bw_graph is not None:
             __query_one_graph(bw_graph)
 
-        for node in graph.nodes:
-            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
-                print(node.layer_type, node.layout, node.input_shapes, node.latency)
-        print("\n\n\n\n\n")
         for node in bw_graph.nodes:
-            if node.layer_type in ("gemm", "bmm", "baddbmm", ):
-                print(node.layer_type, node.layout, node.input_shapes, node.latency)
-
+            if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
+                print(node.layer_type, node.input_shapes, node.layout, node.latency)
         exit(0)
 
         return graph, bw_graph

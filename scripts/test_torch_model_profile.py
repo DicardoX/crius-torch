@@ -99,7 +99,7 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
@@ -107,12 +107,12 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        offline_profiler.profile(opcode="gemm")
-        offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="gemm")
+        # offline_profiler.profile(opcode="bmm")
+        # offline_profiler.profile(opcode="baddbmm")
 
-        # offline_profiler.profile(opcode="all_reduce")
-    
+        offline_profiler.profile(opcode="all_reduce")
+
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
@@ -147,9 +147,9 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -448,9 +448,9 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 2
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         # Init distributed

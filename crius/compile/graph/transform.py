@@ -409,15 +409,12 @@ def _infer_comm_node_input_output_shapes(
 
     if primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "dp":
         # All-reduce the weight gradients (output) of previous node
-        assert len(prev_node.output_shapes[0]) == 2     # [h1, h2]
-        input_shapes = output_shapes = prev_node.output_shapes
+        assert len(prev_node.output_shapes[0]) == 2     # [s*b, h2] x [h2, h1]
+        input_shapes = output_shapes = [prev_node.output_shapes[0]]
     elif primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "tp":
         # All-reduce the activation gradients (input) of previous node
-        assert (
-            len(prev_node.input_shapes[1]) == 3 or      # [s, b, h2]
-            len(prev_node.input_shapes[1]) == 2         # [s*b, h2]
-        )
-        input_shapes = output_shapes = prev_node.input_shapes
+        assert len(prev_node.input_shapes[1]) == 2         # [s*b, h2] x [h2, h1]
+        input_shapes = output_shapes = [prev_node.input_shapes[0]]
     else:
         raise NotImplementedError("Unsupport case when inferring input/output shapes of communication node.")
     

@@ -467,7 +467,7 @@ class CriusOfflineDataManager:
 
             if rank == 0:
                 query_key = OfflineDataRecorder.get_query_key(
-                    opcode, None, None, None, None, None, num_nodes, world_size, tensor_size,
+                    opcode, None, None, None, None, None, None, num_nodes, world_size, tensor_size,
                 )
                 logger.info(
                     f"==========> {opcode} profile: num_nodes: {num_nodes}, group_size: {world_size}, " + \
