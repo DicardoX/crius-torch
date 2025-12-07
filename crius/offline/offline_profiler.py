@@ -454,6 +454,16 @@ class CriusOfflineDataManager:
         __setup(world_size=world_size, rank=rank, backend="nccl")
 
         for tensor_size in comm_data_sizes:
+            query_key = OfflineDataRecorder.get_query_key(
+                opcode, None, None, None, None, None, None, num_nodes, world_size, tensor_size,
+            )
+            if query_key in self.recorder.data and not self.configs.force_overwrite:
+                logger.info(
+                    f"Cached {opcode} profile: num_nodes: {num_nodes}, group_size: {world_size}, " + \
+                    f"tensor_size: {tensor_size}"
+                )
+                continue
+            
             # Reset
             gc.collect()
             torch.cuda.empty_cache()
@@ -466,9 +476,6 @@ class CriusOfflineDataManager:
             )
 
             if rank == 0:
-                query_key = OfflineDataRecorder.get_query_key(
-                    opcode, None, None, None, None, None, None, num_nodes, world_size, tensor_size,
-                )
                 logger.info(
                     f"==========> {opcode} profile: num_nodes: {num_nodes}, group_size: {world_size}, " + \
                     f"tensor_size: {tensor_size}, latency (ms): {op_latency}"

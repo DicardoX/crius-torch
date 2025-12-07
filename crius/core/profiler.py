@@ -196,7 +196,7 @@ class CriusDistProfiler:
 
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
-                        else:
+                        elif query_key is not None:
                             logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
                     
                     setattr(node, "latency", node_latency)
@@ -208,10 +208,18 @@ class CriusDistProfiler:
         if bw_graph is not None:
             __query_one_graph(bw_graph)
 
-        for node in bw_graph.nodes:
-            if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
-                print(node.layer_type, node.input_shapes, node.layout, node.latency)
-        exit(0)
+        checkout_node_latencies = False     # For debug
+        if checkout_node_latencies:
+            for node in graph.nodes:
+                if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
+                    print(node.layer_type, node.input_shapes, node.layout, node.latency)
+
+            print("\n\n\n\n\n")
+
+            for node in bw_graph.nodes:
+                if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
+                    print(node.layer_type, node.input_shapes, node.layout, node.latency)
+            exit(0)
 
         return graph, bw_graph
     
@@ -242,9 +250,6 @@ class CriusDistProfiler:
         self, graph: IRGraph, parallelism_plan: ParallelismPlan, bw_graph: Optional[IRGraph],
     ) -> Tuple[List[List[float]], List[float]]:
         """ Compute per-stage latencies. """
-
-        # FIXME(chunyu): In fact, the gradient sync of DP is conduncted at last per-batch instead of per-microbatch. We should seperate this
-        # rather than accounting it in the latency of backward stages.
 
         stage_latencies = [[0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree)]
         grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
@@ -309,6 +314,10 @@ class CriusDistProfiler:
         where `(i,j)` denotes stage `i` executes forward micro-batch `j` when `j >= 0`,
         and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
+
+        print(stage_latencies)
+        print(grad_sync_latencies)
+        exit(0)
         
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree

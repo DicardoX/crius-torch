@@ -83,10 +83,10 @@ class TorchModelProfileTest(unittest.TestCase):
             max_seq_len=2048,
             seq_len_step="power-of-2",
             gemm_left_op_hidden_dims=[      # Only consider forward ops
-                2048, 4096, 8192,
+                2048, 4096, 8192, 16384, 
             ],
             gemm_right_op_hidden_dims=[
-                2048, 4096, 6144, 12288, 8192, 16384, 25000,
+                2048, 4096, 6144, 12288, 8192, 16384, 25000, 50000, 
             ],
             bmm_op_hidden_dims=[
                 2048, 4096, 8192,
@@ -94,12 +94,15 @@ class TorchModelProfileTest(unittest.TestCase):
             baddbmm_op_hidden_dims=[
                 2048, 4096, 8192,
             ],
-            comm_data_sizes = [2**i for i in range(1,31)],
+            comm_data_sizes = [2**i for i in range(1,31)] + [
+                # Special volumes
+                204800000, 50331648,
+            ],
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
@@ -148,8 +151,8 @@ class TorchModelProfileTest(unittest.TestCase):
         vocab_size = 50000
         
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -448,8 +451,8 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
