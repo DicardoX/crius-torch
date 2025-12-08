@@ -45,11 +45,18 @@ class TransformerBlock(MegatronModule):
 
     def _build_layers(self):
         # Transformer layers
-        if global_configs.pipeline_model_parallel_size > 1:
-            assert self.config.num_layers % global_configs.pipeline_model_parallel_size == 0
-            num_layers = self.config.num_layers // global_configs.pipeline_model_parallel_size
-        else:
+        if getattr(self.config, "device_free_profile", False):
+            # In device-free profiling, we load the entire model rather than partitioning layers
+            # here. We 'partition' layers by annotating node index in the IR graph, see in: 
+            # `planner.py/CriusParallelPlanner.partition_pipeline_stages()`.
             num_layers = self.config.num_layers
+        
+        else:
+            if global_configs.pipeline_model_parallel_size > 1:
+                assert self.config.num_layers % global_configs.pipeline_model_parallel_size == 0
+                num_layers = self.config.num_layers // global_configs.pipeline_model_parallel_size
+            else:
+                num_layers = self.config.num_layers
 
         self.layers = torch.nn.ModuleList([TransformerLayer(self.config, i + 1) for i in range(num_layers)])
         

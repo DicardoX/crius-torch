@@ -150,8 +150,8 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -235,6 +235,7 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_dtype=dtype,
             fp16=True,
         )
+        setattr(megatron_config, "device_free_profile", True)
         setattr(megatron_config, "max_sequence_length", seq_len)
         setattr(megatron_config, "vocab_size", vocab_size)
         setattr(megatron_config, "microbatch_size", global_bs // num_micro_batches)
@@ -451,8 +452,8 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
@@ -542,7 +543,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
         )
         trainer.train()
 

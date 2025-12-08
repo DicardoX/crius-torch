@@ -192,7 +192,7 @@ class CriusParallelPlanner:
             assert node.fw_node.stage_index is not None, f"Stage index of forward node '{node.fw_node.target}' is not properly set."
             # bw_stage_index = 2 * parallelism_plan.pipeline_parallel_degree - node.fw_node.stage_index - 1
             setattr(node, "stage_index", node.fw_node.stage_index)
-    
+
     @classmethod
     def _partition_pipeline_stages_auto(cls, graph: IRGraph, parallelism_plan: ParallelismPlan, grid: Grid) -> List[int]:
         """ Partition pipeline stages based on inter-stage load (i.e., flops) balance. 
