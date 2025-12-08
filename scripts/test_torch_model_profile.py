@@ -542,6 +542,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
+            use_pytorch_profiler=True,
         )
         trainer.train()
 

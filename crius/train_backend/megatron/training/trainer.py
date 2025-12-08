@@ -60,6 +60,7 @@ class Trainer:
         opt_param_scheduler: The learning rate scheduler.
         pipeline_strategy: Strategy of the pipeline execution.
         forward_only: Only perform forward pass.
+        use_pytorch_profiler: Use PyTorch's native profiler for in-depth performance analysis.
     """
 
     def __init__(
@@ -73,6 +74,7 @@ class Trainer:
         opt_param_scheduler: OptimizerParamScheduler,
         pipeline_strategy: str = None,
         forward_only: bool = False,
+        use_pytorch_profiler: bool = False,
     ) -> None:
         """ Initialize a Trainer object. """
 
@@ -85,6 +87,7 @@ class Trainer:
         self.opt_param_scheduler = opt_param_scheduler
         self.pipeline_strategy = pipeline_strategy
         self.forward_only = forward_only
+        self.use_pytorch_profiler = use_pytorch_profiler
 
         self.forward_step_func = forward_step_func
         self.forward_backward_func = None
@@ -125,7 +128,7 @@ class Trainer:
             ),
             forward_only=self.forward_only,
         )
-
+        
         # FIXME(chunyu): Currently we only consider forward-backward computation without
         # other processes such as optimizer step.
         self.timer.stop("train_step", use_cuda_event=True)
@@ -168,9 +171,22 @@ class Trainer:
         # - Finalize model gradients (i.e., grad sync)
         megatron_config.finalize_model_grads_func = finalize_model_grads if self.optimizer else None
 
+        prof = None
+        if self.use_pytorch_profiler:
+            prof = torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA, ],
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+            )
+            prof.start()
+
         # Training loop
         tr_losses = []
         for iter_index in range(self.megatron_config.num_iters):
+            if self.use_pytorch_profiler:
+                prof.step()
+            
             (tr_loss, ) = self.train_step()
             tr_losses.append(tr_loss)
 
@@ -181,6 +197,11 @@ class Trainer:
                 logger=logger,
                 log_level="info",
             )
+        
+        if self.use_pytorch_profiler:
+            prof.stop()
+            pp_rank = parallel_state.get_pipeline_model_parallel_rank()
+            prof.export_chrome_trace(f"/app/torch_exec_trace_pp_rank_{pp_rank}.json")
 
         if report_metrics:
             raw_record = self.timer._records.pop("train_step")

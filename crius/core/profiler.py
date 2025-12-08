@@ -315,6 +315,8 @@ class CriusDistProfiler:
         and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
 
+        # FIXME(chunyu): Only PP0's forward/backward latencies are correctly set.
+
         print(stage_latencies)
         print(grad_sync_latencies)
         exit(0)
