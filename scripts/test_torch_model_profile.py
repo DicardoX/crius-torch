@@ -116,7 +116,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         offline_profiler.profile(opcode="all_reduce")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -150,9 +150,9 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         global_configs.enable_backward_graph_generation = True
@@ -407,7 +407,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -452,10 +452,20 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 10
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
+
+        # Get number of microbatches
+        # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
+        # only changing the number of micro-batches to maintain constant global batch size.
+        micro_batch_size =  global_bs // num_micro_batches
+        assert global_bs % (micro_batch_size * global_configs.data_parallel_size) == 0, \
+            f"Global batch size {global_bs} must be divisible by micro-batch-size {micro_batch_size} " + \
+            f"x data parallel size {global_configs.data_parallel_size}."
+        num_micro_batches = global_bs // (micro_batch_size * global_configs.data_parallel_size)
+        global_bs = micro_batch_size * num_micro_batches    # of this DP rank
 
         # Init distributed
         initialize_distributed(

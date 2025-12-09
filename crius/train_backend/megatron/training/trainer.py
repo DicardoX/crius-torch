@@ -88,6 +88,12 @@ class Trainer:
         self.pipeline_strategy = pipeline_strategy
         self.forward_only = forward_only
         self.use_pytorch_profiler = use_pytorch_profiler
+        if use_pytorch_profiler:
+            dp_rank = parallel_state.get_data_parallel_rank()
+            tp_rank = parallel_state.get_tensor_model_parallel_rank()
+            if dp_rank > 0 or tp_rank > 0:
+                # Only enable profiler on dp0 and tp0
+                self.use_pytorch_profiler = False
 
         self.forward_step_func = forward_step_func
         self.forward_backward_func = None
@@ -189,7 +195,6 @@ class Trainer:
             
             (tr_loss, ) = self.train_step()
             tr_losses.append(tr_loss)
-
             log_on_rank(
                 msg=f"Losses of the training iteration ({iter_index}): {tr_loss}",
                 rank=[0, parallel_state.get_pipeline_model_parallel_last_rank()],
@@ -202,6 +207,13 @@ class Trainer:
             prof.stop()
             pp_rank = parallel_state.get_pipeline_model_parallel_rank()
             prof.export_chrome_trace(f"/app/torch_exec_trace_pp_rank_{pp_rank}.json")
+            log_on_rank(
+                msg=f"Save PyTorch execution trace to /app/torch_exec_trace_pp_rank_{pp_rank}.json",
+                rank=[0, parallel_state.get_pipeline_model_parallel_last_rank()],
+                group_type=["tensor", "pipeline"],
+                logger=logger,
+                log_level="info",
+            )
 
         if report_metrics:
             raw_record = self.timer._records.pop("train_step")
