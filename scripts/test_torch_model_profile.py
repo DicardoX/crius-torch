@@ -79,7 +79,7 @@ class TorchModelProfileTest(unittest.TestCase):
             min_batch_size=4,
             max_batch_size=4,
             batch_size_step="power-of-2",
-            min_seq_len=2048,
+            min_seq_len=1024,
             max_seq_len=2048,
             seq_len_step="power-of-2",
             gemm_left_op_hidden_dims=[      # Only consider forward ops
@@ -110,11 +110,11 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
         
-        # offline_profiler.profile(opcode="gemm")
-        # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
+        offline_profiler.profile(opcode="gemm")
+        offline_profiler.profile(opcode="bmm")
+        offline_profiler.profile(opcode="baddbmm")
 
-        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="all_reduce")
 
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -139,9 +139,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
-        seq_len = 2048
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 1024
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
@@ -150,8 +150,8 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -440,16 +440,16 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 8
-        seq_len = 2048
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 1024
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 10
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
@@ -553,7 +553,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
         )
         trainer.train()
 

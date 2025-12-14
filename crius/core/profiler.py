@@ -314,6 +314,10 @@ class CriusDistProfiler:
         where `(i,j)` denotes stage `i` executes forward micro-batch `j` when `j >= 0`,
         and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
+
+        print(stage_latencies)
+        print(grad_sync_latencies)
+        exit(0)
         
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree
