@@ -125,8 +125,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> GEMM operator latency: {(op_latency):.3f} ms")
 
-
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -142,7 +141,7 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             gemm_left_op_hidden_dims=[      # Only consider forward ops
@@ -168,16 +167,13 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        # TODO(chunyu): Add torch empty weight init and transposed weight options.
-        raise NotImplementedError()
-
         offline_profiler.profile(opcode="gemm")
         offline_profiler.profile(opcode="bmm")
         offline_profiler.profile(opcode="baddbmm")
 
         # offline_profiler.profile(opcode="all_reduce")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 

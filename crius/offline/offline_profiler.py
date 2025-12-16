@@ -239,19 +239,29 @@ class CriusOfflineDataManager:
         """ Benchmark one operator under specific configurations. """
         if opcode in ("gemm", "bmm"):
             left_op = torch.randn(shapes[0], dtype=dtype, device=device)
-            right_op = torch.randn(shapes[1], dtype=dtype, device=device)
-            result_op = torch.zeros(shapes[2], dtype=dtype, device=device)
-            args = (left_op, right_op, )
+            right_op = torch.randn(shapes[1], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[1], dtype=dtype, device=device)
+            result_op = torch.empty(shapes[2], dtype=dtype, device=device)
+            if opcode == "gemm":
+                args = (left_op, right_op, ) if (
+                    not self.configs.use_transposed_weight or shapes[0][-1] == shapes[1][0]
+                ) else (left_op, right_op.t(), )    # Transpose if shape mismatched
+            elif opcode == "bmm":
+                args = (left_op, right_op, )
+        
         elif opcode == "baddbmm":
             left_op = torch.randn(shapes[0], dtype=dtype, device=device)
             mid_op = torch.randn(shapes[1], dtype=dtype, device=device)
             right_op = torch.randn(shapes[2], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
             args = (left_op, mid_op, right_op, )
+        
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype).cuda()
             if opcode == "all_reduce":
                 args = (tensor, torch.distributed.ReduceOp.SUM, )
+        
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
 
@@ -303,6 +313,10 @@ class CriusOfflineDataManager:
                                 shapes = [
                                     (seq_len, bs, left_hidden_dim),
                                     (left_hidden_dim, right_hidden_dim),
+                                    (seq_len, bs, right_hidden_dim),
+                                ] if not self.configs.use_transposed_weight else [
+                                    (seq_len, bs, left_hidden_dim),
+                                    (right_hidden_dim, left_hidden_dim),
                                     (seq_len, bs, right_hidden_dim),
                                 ]
                             elif layout == "s:b:h2,h2:h1":
