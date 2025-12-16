@@ -156,6 +156,15 @@ class TorchModelProfileTest(unittest.TestCase):
             baddbmm_op_hidden_dims=[
                 2048, 4096, 8192,
             ],
+            layernorm_op_hidden_dims=[
+                2048, 4096, 8192,
+            ],
+            dropout_op_hidden_dims=[
+                2048, 4096, 8192,
+            ],
+            masked_fill_op_num_attn_heads=[
+                16, 32,
+            ],
             comm_data_sizes = [2**i for i in range(1,31)] + [
                 # Special volumes
                 204800000, 50331648,
@@ -169,7 +178,10 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # offline_profiler.profile(opcode="gemm")
         # offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="layernorm")
+        # offline_profiler.profile(opcode="dropout")
+        offline_profiler.profile(opcode="masked_fill_")
 
         # offline_profiler.profile(opcode="all_reduce")
 

@@ -161,10 +161,27 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
             ):
                 setattr(node, "layer_type", "bmm")
                 setattr(node, "layout", "b:s:s,b:s:h1")     # e.g., attn score @ V
+            elif (
+                # ------------- String matching rules -------------
+                "dropout" in str(node.target)
+            ):
+                setattr(node, "layer_type", "dropout")
+                setattr(node, "layout", "s:b:h1")
             else:
                 setattr(node, "layer_type", "unknown_call_function")
                 setattr(node, "layout", None)
         
+        elif node.op == "call_method":
+            if (
+                # ------------- String matching rules -------------
+                "masked_fill_" in str(node.target)
+            ):
+                setattr(node, "layer_type", "masked_fill_")
+                setattr(node, "layout", "b:n:s:s,b:1:s:s")     # `n` is #attn_heads per TP rank
+            else:
+                setattr(node, "layer_type", "unknown_call_method")
+                setattr(node, "layout", None)
+
         else:
             setattr(node, "layer_type", "unknown_others")
             setattr(node, "layout", None)

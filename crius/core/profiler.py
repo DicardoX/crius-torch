@@ -101,7 +101,7 @@ class CriusDistProfiler:
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
             if node.layer_type in (
-                "gemm", "bmm", "baddbmm", 
+                "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_",
                 "all_reduce", "all_gather", "all_to_all", "reduce_scatter", 
             ):
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
@@ -157,7 +157,7 @@ class CriusDistProfiler:
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
-                        elif node.layer_type in ("gemm", "bmm", "baddbmm", ):
+                        elif node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", ):
                             assert getattr(node, "layout", None) is not None
                             layout = [l.split(":") for l in node.layout.split(",")]
                             batch_size_indices = self._get_one_dim_index("b", layout)
@@ -184,7 +184,7 @@ class CriusDistProfiler:
                                     right_op_hidden_dim = input_shapes[1][1]
                                 else:
                                     raise ValueError(f"Unsupported hardcoded node layout: {node.layout}")
-                        
+
                         else:
                             logger.warning(f"Ignored node type {node.layer_type} in latency query.")
                         
@@ -212,7 +212,9 @@ class CriusDistProfiler:
         if checkout_node_latencies:
             accumulated_latency = 0.0
             for node in graph.nodes:
-                if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
+                if node.layer_type in (
+                    "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "all_reduce",
+                ):
                     accumulated_latency += node.latency
                     print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
 

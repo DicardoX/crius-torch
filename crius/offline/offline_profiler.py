@@ -23,6 +23,11 @@ __all__ = [
 ]
 
 
+def masked_fill_op_func(input: torch.Tensor, mask: torch.Tensor, value: float) -> torch.Tensor:
+    """ Masked fill operator function. """
+    return input.masked_fill_(mask, value)
+
+
 @dataclass
 class OfflineProfileConfigs:
     """ Configuration for offline profiling. """
@@ -122,6 +127,48 @@ class OfflineProfileConfigs:
     )
     """ Candidate layouts of BADDBMM operations. """
 
+    # LAYERNORM
+    layernorm_op_func: Callable = torch.nn.LayerNorm
+    """ LayerNorm operator function. """
+
+    layernorm_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in LayerNorm operations. """
+
+    layernorm_layouts: List[str] = field(
+        default_factory=lambda: [
+            "s:b:h1",
+        ]
+    )
+    """ Candidate layouts of LayerNorm operations. """
+
+    # DROPOUT
+    dropout_op_func: Callable = torch.nn.Dropout
+    """ Dropout operator function. """
+
+    dropout_op_hidden_dims: List[int] = None
+    """ Candidate hidden dimensions of the operand in Dropout operations. """
+
+    dropout_layouts: List[str] = field(
+        default_factory=lambda: [
+            "s:b:h1",
+        ]
+    )
+    """ Candidate layouts of Dropout operations. """
+
+    # MASKED_FILL_
+    masked_fill_op_func: Callable = masked_fill_op_func
+    """ Masked fill operator function. """
+
+    masked_fill_op_num_attn_heads: List[int] = None
+    """ Candidate #attn_heads of the operand in MaskedFill_ operations. """
+
+    masked_fill_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:n:s:s,b:1:s:s",
+        ]
+    )
+    """ Candidate layouts of MaskedFill_ operations. """
+
     # Communication
     allreduce_op_func: Callable = torch.distributed.all_reduce
 
@@ -206,23 +253,22 @@ class CriusOfflineDataManager:
         
         if opcode == "gemm":
             op_func = self.configs.gemm_op_func
-            dims_collection = [
-                self.configs.gemm_left_op_hidden_dims,
-                self.configs.gemm_right_op_hidden_dims,
-            ]
             profile_func = self._profile_all_gemm
         elif opcode == "bmm":
             op_func = self.configs.bmm_op_func
-            dims_collection = [
-                self.configs.bmm_op_hidden_dims,
-            ]
             profile_func = self._profile_all_bmm
         elif opcode == "baddbmm":
             op_func = self.configs.baddbmm_op_func
-            dims_collection = [
-                self.configs.baddbmm_op_hidden_dims,
-            ]
             profile_func = self._profile_all_baddbmm
+        elif opcode == "layernorm":
+            op_func = self.configs.layernorm_op_func
+            profile_func = self._profile_all_layernorm
+        elif opcode == "dropout":
+            op_func = self.configs.dropout_op_func
+            profile_func = self._profile_all_dropout
+        elif opcode == "masked_fill_":
+            op_func = self.configs.masked_fill_op_func
+            profile_func = self._profile_all_masked_fill
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
         
@@ -270,6 +316,31 @@ class CriusOfflineDataManager:
             result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
             args = (left_op, mid_op, right_op, )
         
+        elif opcode == "layernorm":
+            op_func = op_func(shapes[0][-1], eps=1e-5, device=device, dtype=dtype)
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            args = (left_op, )
+        
+        elif opcode == "dropout":
+            op_func = op_func(p=0.1, inplace=False)
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            args = (left_op, )
+
+        elif opcode == "masked_fill_":
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            mask = torch.ones(shapes[1], dtype=torch.bool, device=device)
+            value = -10000.0
+            args = (left_op, mask, value, )
+
+            # TODO(chunyu): Debug masked_fill_ performance misalignment.
+            raise NotImplementedError
+
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype).cuda()
             if opcode == "all_reduce":
@@ -457,6 +528,112 @@ class CriusOfflineDataManager:
                                         f"seq_len: {seq_len}, hd: {hidden_dim // num_attn_heads}, latency (ms): {op_latency}")
                             self.recorder.write_one_entry(query_key, op_latency, None)
     
+    def _profile_all_layernorm(
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
+    ) -> None:
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for hidden_dim in self.configs.layernorm_op_hidden_dims:
+                    for layout in self.configs.layernorm_layouts:
+                        if layout == "s:b:h1":
+                            shapes = [
+                                (seq_len, bs, hidden_dim),
+                            ]
+                        else:
+                            raise ValueError(f"Unsupport LayerNorm layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key(
+                            "layernorm", bs, seq_len, hidden_dim, None, layout,
+                        )
+                        if query_key in self.recorder.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached LayerNorm profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"seq_len: {seq_len}, hd: {hidden_dim}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="layernorm", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                            num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> LayerNorm profile: layout: {layout}, batch_size: {bs}, " + 
+                                    f"seq_len: {seq_len}, hd: {hidden_dim}, latency (ms): {op_latency}")
+                        self.recorder.write_one_entry(query_key, op_latency, None)
+
+    def _profile_all_dropout(
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
+    ) -> None:
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for hidden_dim in self.configs.dropout_op_hidden_dims:
+                    for layout in self.configs.dropout_layouts:
+                        if layout == "s:b:h1":
+                            shapes = [
+                                (seq_len, bs, hidden_dim),
+                            ]
+                        else:
+                            raise ValueError(f"Unsupport Dropout layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key(
+                            "dropout", bs, seq_len, hidden_dim, None, layout,
+                        )
+                        if query_key in self.recorder.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached Dropout profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"seq_len: {seq_len}, hd: {hidden_dim}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="dropout", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                            num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> Dropout profile: layout: {layout}, batch_size: {bs}, " + 
+                                    f"seq_len: {seq_len}, hd: {hidden_dim}, latency (ms): {op_latency}")
+                        self.recorder.write_one_entry(query_key, op_latency, None)
+
+    def _profile_all_masked_fill(
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
+    ) -> None:
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for num_heads in self.configs.masked_fill_op_num_attn_heads:
+                    for layout in self.configs.masked_fill_layouts:
+                        if layout == "b:n:s:s,b:1:s:s":
+                            shapes = [
+                                (bs, num_heads, seq_len, seq_len),
+                                (bs, 1, seq_len, seq_len),
+                            ]
+                        else:
+                            raise ValueError(f"Unsupport MaskedFill_ layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key(
+                            "masked_fill_", bs, seq_len, None, None, layout, num_heads,
+                        )
+                        if query_key in self.recorder.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached MaskedFill_ profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"seq_len: {seq_len}, #attn_heads: {num_heads}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="masked_fill_", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                            num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> MaskedFill_ profile: layout: {layout}, batch_size: {bs}, " + 
+                                    f"seq_len: {seq_len}, #attn_heads: {num_heads}, latency (ms): {op_latency}")
+                        self.recorder.write_one_entry(query_key, op_latency, None)
+
     def _profile_communication(
         self, opcode: str,
     ) -> None:
