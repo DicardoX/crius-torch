@@ -248,12 +248,25 @@ class CriusOfflineDataManager:
                     not self.configs.use_transposed_weight or shapes[0][-1] == shapes[1][0]
                 ) else (left_op, right_op.t(), )    # Transpose if shape mismatched
             elif opcode == "bmm":
+                # FIXME(chunyu): Currently we ignore the transpose(0, 1) of bmm because it 
+                #                causes negligible latency difference.
+                # For bmm, the torh.empty init is applied only when the value tensor is zero-like,
+                # i.e., the V projection tensor is empty.
                 args = (left_op, right_op, )
         
         elif opcode == "baddbmm":
-            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
-            mid_op = torch.randn(shapes[1], dtype=dtype, device=device)
-            right_op = torch.randn(shapes[2], dtype=dtype, device=device)
+            # FIXME(chunyu): Currently we ignore the transpose(0, 1) of baddbmm because it 
+            #                causes negligible latency difference.
+            # FIXME(chunyu): The measured latency is a little bit longer than the ground truth...
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            mid_op = torch.randn(shapes[1], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[1], dtype=dtype, device=device)
+            right_op = torch.randn(shapes[2], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[2], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
             args = (left_op, mid_op, right_op, )
         

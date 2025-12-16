@@ -210,15 +210,19 @@ class CriusDistProfiler:
 
         checkout_node_latencies = True     # For debug
         if checkout_node_latencies:
+            accumulated_latency = 0.0
             for node in graph.nodes:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
-                    print(node.layer_type, node.input_shapes, node.layout, node.latency)
+                    accumulated_latency += node.latency
+                    print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
 
             print("\n\n\n\n\n")
-
+            
+            accumulated_latency = 0.0
             for node in bw_graph.nodes:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
-                    print(node.layer_type, node.input_shapes, node.layout, node.latency)
+                    accumulated_latency += node.latency
+                    print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
             exit(0)
 
         return graph, bw_graph
@@ -281,6 +285,9 @@ class CriusDistProfiler:
                 else:
                     # Normal backward nodes
                     stage_latencies[node.stage_index][1] += node.latency
+
+        print(stage_latencies)
+        exit(0)
 
         return stage_latencies, grad_sync_latencies
 
