@@ -71,6 +71,62 @@ class TorchModelProfileTest(unittest.TestCase):
     """
 
     @unittest.skip("Pass.")
+    def test_one_torch_operator(self):
+        """ Profile one torch operator in a hackable manner. """
+
+        num_warmup_steps = 100
+        num_profile_steps = 1000
+        use_pytorch_profiler = True
+        use_torch_empty_to_init_weight = True
+        use_transposed_weight = True
+
+        # GEMM
+        left_op = torch.randn((1024, 4, 4096), device="cuda", dtype=torch.float16)
+        right_op = torch.empty((6144, 4096), device="cuda", dtype=torch.float16) \
+            if use_torch_empty_to_init_weight else torch.randn((6144, 4096), device="cuda", dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        for _ in range(num_warmup_steps):
+            if use_transposed_weight:
+                _ = torch.matmul(left_op, right_op.t())
+            else:
+                _ = torch.matmul(left_op, right_op)
+        torch.cuda.synchronize()
+        
+        if use_pytorch_profiler:
+            prof = torch.profiler.profile(
+                activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA, ],
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True,
+            )
+            prof.start()
+
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+        # Measure
+        start_event.record()
+        for _ in range(num_profile_steps):
+            if use_pytorch_profiler:
+                prof.step()
+            
+            if use_transposed_weight:
+                _ = torch.matmul(left_op, right_op.t())
+            else:
+                _ = torch.matmul(left_op, right_op)
+        
+        end_event.record()
+        end_event.synchronize()
+
+        if use_pytorch_profiler:
+            prof.stop()
+            prof.export_chrome_trace('/app/torch_op_trace.json')
+
+        op_latency = start_event.elapsed_time(end_event) / num_profile_steps
+        print(f"\n=======> GEMM operator latency: {(op_latency):.3f} ms")
+
+
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -82,6 +138,13 @@ class TorchModelProfileTest(unittest.TestCase):
             min_seq_len=1024,
             max_seq_len=2048,
             seq_len_step="power-of-2",
+            dtype=torch.float16,
+            device="cuda",
+            num_warmup_steps=5,
+            num_profile_steps=10,
+            force_overwrite=False,
+            use_torch_empty_to_init_weight=True,
+            use_transposed_weight=True,
             gemm_left_op_hidden_dims=[      # Only consider forward ops
                 2048, 4096, 8192, 16384, 
             ],
@@ -98,25 +161,23 @@ class TorchModelProfileTest(unittest.TestCase):
                 # Special volumes
                 204800000, 50331648,
             ],
-            dtype=torch.float16,
-            device="cuda",
-            num_warmup_steps=5,
-            num_profile_steps=10,
-            force_overwrite=False,
         )
         offline_profiler = CriusOfflineDataManager(
             profile_configs=profile_configs,
             to_store_path='./crius/offline/',
             data_filename='prof_data.pkl',
         )
-        
+
+        # TODO(chunyu): Add torch empty weight init and transposed weight options.
+        raise NotImplementedError()
+
         offline_profiler.profile(opcode="gemm")
         offline_profiler.profile(opcode="bmm")
         offline_profiler.profile(opcode="baddbmm")
 
         # offline_profiler.profile(opcode="all_reduce")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -411,8 +472,8 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
-        import os
-        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+        # import os
+        # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
         # from megatron.core.model_parallel_config import ModelParallelConfig
         from megatron.core.transformer.transformer_config import TransformerConfig

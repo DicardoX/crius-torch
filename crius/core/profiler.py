@@ -208,7 +208,7 @@ class CriusDistProfiler:
         if bw_graph is not None:
             __query_one_graph(bw_graph)
 
-        checkout_node_latencies = False     # For debug
+        checkout_node_latencies = True     # For debug
         if checkout_node_latencies:
             for node in graph.nodes:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):

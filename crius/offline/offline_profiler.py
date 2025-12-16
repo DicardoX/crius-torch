@@ -45,6 +45,30 @@ class OfflineProfileConfigs:
     seq_len_step: Union[int, str] = "power-of-2"
     """ Step size to increment sequence length during profiling. """
 
+    dtype: torch.dtype = torch.float16
+    """ Data type for profiling. Default is float16. """
+
+    device: str = "cuda:0"
+    """ Device to run the profiling on. Default is 'cuda:0'. """
+
+    num_warmup_steps: int = 5
+    """ Number of warmup steps before profiling. """
+
+    num_profile_steps: int = 10
+    """ Number of profiling steps to collect performance metrics. """
+
+    use_torch_empty_to_init_weight: bool = True
+    """ Use `torch.empty` to initialize weight tensors, instead of `torch.randn()`. 
+    This can reduce the latency of GEMM-like operations, because all-zero weight incurs 
+    only 1 read from GPU DRAM, then making other reads from the faster L2 cache."""
+
+    use_transposed_weight: bool = True
+    """ Use transposed weight tensor (then call weight.t() in the operator), which is a 
+    common practice in Megatron for GEMM operators."""
+
+    force_overwrite: bool = False
+    """ Forcibly overwrite all profiled data and re-run. """
+
     # GEMM
     gemm_op_func: Callable = torch.matmul
 
@@ -108,21 +132,6 @@ class OfflineProfileConfigs:
 
     comm_group_size: int = 1
     """ Number of ranks in this communication group. """
-
-    dtype: torch.dtype = torch.float16
-    """ Data type for profiling. Default is float16. """
-
-    device: str = "cuda:0"
-    """ Device to run the profiling on. Default is 'cuda:0'. """
-
-    num_warmup_steps: int = 5
-    """ Number of warmup steps before profiling. """
-
-    num_profile_steps: int = 10
-    """ Number of profiling steps to collect performance metrics. """
-
-    force_overwrite: bool = False
-    """ Forcibly overwrite all profiled data and re-run. """
 
     def __post_init__(self):
         # Default dimensions
