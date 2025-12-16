@@ -187,7 +187,7 @@ class CriusDistProfiler:
 
                         else:
                             logger.warning(f"Ignored node type {node.layer_type} in latency query.")
-                        
+
                         query_key = OfflineDataRecorder.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
                             node.layout, num_attn_heads_per_rank, global_configs.num_nodes, comm_group_size, 
