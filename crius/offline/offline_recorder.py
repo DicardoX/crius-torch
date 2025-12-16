@@ -101,6 +101,8 @@ class OfflineDataRecorder:
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
         elif op_type in ("layernorm", "dropout"):
             return f"{op_type}_b{batch_size}_s{seq_len}_h{left_op_hidden_dim}_layout_[{layout}]"
+        elif op_type == "masked_fill_":
+            return f"{op_type}_b{batch_size}_s{seq_len}_n{num_attn_heads}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{op_type}_n{num_comm_nodes}_gs{comm_group_size}_d{comm_data_size}"

@@ -225,7 +225,7 @@ class CriusDistProfiler:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
                     accumulated_latency += node.latency
                     print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
-            exit(0)
+            # exit(0)
 
         return graph, bw_graph
     

@@ -338,9 +338,6 @@ class CriusOfflineDataManager:
             value = -10000.0
             args = (left_op, mask, value, )
 
-            # TODO(chunyu): Debug masked_fill_ performance misalignment.
-            raise NotImplementedError
-
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype).cuda()
             if opcode == "all_reduce":
