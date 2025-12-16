@@ -132,6 +132,13 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
             ):
                 setattr(node, "layer_type", "layernorm")
                 setattr(node, "layout", "s:b:h1")
+            elif (
+                # ------------- String matching rules -------------
+                "dropout" in str(node.target)
+            ):
+                setattr(node, "layer_type", "dropout")
+                layout = "s:b:h1" if len(node.input_shapes[0]) == 3 else "b:n:s:s"
+                setattr(node, "layout", layout)
             else:
                 setattr(node, "layer_type", "unknown_call_module")
                 setattr(node, "layout", None)
@@ -167,6 +174,12 @@ def infer_node_layer_types(graph: Optional[IRGraph]) -> IRGraph:
             ):
                 setattr(node, "layer_type", "dropout")
                 setattr(node, "layout", "s:b:h1")
+            elif (
+                # ------------- String matching rules -------------
+                "softmax" in str(node.target)
+            ):
+                setattr(node, "layer_type", "softmax")
+                setattr(node, "layout", "b:n:s:s")
             else:
                 setattr(node, "layer_type", "unknown_call_function")
                 setattr(node, "layout", None)

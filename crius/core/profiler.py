@@ -101,7 +101,7 @@ class CriusDistProfiler:
         for node in graph.nodes:
             prefix_str_, suffix_str_ = "", ""
             if node.layer_type in (
-                "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_",
+                "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "softmax",
                 "all_reduce", "all_gather", "all_to_all", "reduce_scatter", 
             ):
                 prefix_str_ = "\033[1;37;42m------> [HEAVY-OP] "
@@ -157,7 +157,7 @@ class CriusDistProfiler:
                             comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
-                        elif node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", ):
+                        elif node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "softmax"):
                             assert getattr(node, "layout", None) is not None
                             layout = [l.split(":") for l in node.layout.split(",")]
                             batch_size_indices = self._get_one_dim_index("b", layout)
@@ -185,6 +185,12 @@ class CriusDistProfiler:
                                 else:
                                     raise ValueError(f"Unsupported hardcoded node layout: {node.layout}")
 
+                            if node.layer_type == "dropout":
+                                if node.layout == "s:b:h1":
+                                    num_attn_heads_per_rank = None
+                                elif node.layout == "b:n:s:s":
+                                    left_op_hidden_dim = None
+
                         else:
                             logger.warning(f"Ignored node type {node.layer_type} in latency query.")
 
@@ -208,12 +214,12 @@ class CriusDistProfiler:
         if bw_graph is not None:
             __query_one_graph(bw_graph)
 
-        checkout_node_latencies = True     # For debug
+        checkout_node_latencies = False     # For debug
         if checkout_node_latencies:
             accumulated_latency = 0.0
             for node in graph.nodes:
                 if node.layer_type in (
-                    "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "all_reduce",
+                    "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "softmax", "all_reduce",
                 ):
                     accumulated_latency += node.latency
                     print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
@@ -288,9 +294,8 @@ class CriusDistProfiler:
                     # Normal backward nodes
                     stage_latencies[node.stage_index][1] += node.latency
 
-        print(stage_latencies)
-        exit(0)
-
+        logger.info(f"=========> Per-stage latencies (ms): {stage_latencies}")
+        logger.info(f"=========> Per-stage grad sync latencies (ms): {grad_sync_latencies}")
         return stage_latencies, grad_sync_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
@@ -324,10 +329,6 @@ class CriusDistProfiler:
         and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
 
-        print(stage_latencies)
-        print(grad_sync_latencies)
-        exit(0)
-        
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree
 

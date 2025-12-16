@@ -148,9 +148,13 @@ class OfflineProfileConfigs:
     dropout_op_hidden_dims: List[int] = None
     """ Candidate hidden dimensions of the operand in Dropout operations. """
 
+    dropout_op_num_attn_heads: List[int] = None
+    """ Candidate #attn_heads of the operand in Dropout operations. """
+
     dropout_layouts: List[str] = field(
         default_factory=lambda: [
             "s:b:h1",
+            "b:n:s:s",
         ]
     )
     """ Candidate layouts of Dropout operations. """
@@ -168,6 +172,20 @@ class OfflineProfileConfigs:
         ]
     )
     """ Candidate layouts of MaskedFill_ operations. """
+
+    # SOFTMAX
+    softmax_op_func: Callable = torch.nn.Softmax
+    """ Softmax operator function. """
+
+    softmax_op_num_attn_heads: List[int] = None
+    """ Candidate #attn_heads of the operand in Softmax operations. """
+
+    softmax_layouts: List[str] = field(
+        default_factory=lambda: [
+            "b:n:s:s",
+        ]
+    )
+    """ Candidate layouts of Softmax operations. """
 
     # Communication
     allreduce_op_func: Callable = torch.distributed.all_reduce
@@ -269,6 +287,9 @@ class CriusOfflineDataManager:
         elif opcode == "masked_fill_":
             op_func = self.configs.masked_fill_op_func
             profile_func = self._profile_all_masked_fill
+        elif opcode == "softmax":
+            op_func = self.configs.softmax_op_func
+            profile_func = self._profile_all_softmax
         else:
             raise ValueError(f"Invalid opcode: {opcode}")
         
@@ -337,6 +358,14 @@ class CriusOfflineDataManager:
             mask = torch.ones(shapes[1], dtype=torch.bool, device=device)
             value = -10000.0
             args = (left_op, mask, value, )
+
+        elif opcode == "softmax":
+            # FIXME(chunyu): The measured latency is shorter than the ground truth...
+            op_func = op_func(dim=-1)
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            args = (left_op, )
 
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype).cuda()
@@ -566,34 +595,42 @@ class CriusOfflineDataManager:
         for bs in batch_sizes:
             for seq_len in seq_lens:
                 for hidden_dim in self.configs.dropout_op_hidden_dims:
-                    for layout in self.configs.dropout_layouts:
-                        if layout == "s:b:h1":
-                            shapes = [
-                                (seq_len, bs, hidden_dim),
-                            ]
-                        else:
-                            raise ValueError(f"Unsupport Dropout layout: {layout}")
+                    for num_heads in self.configs.dropout_op_num_attn_heads:
+                        for layout in self.configs.dropout_layouts:
+                            hidden_dim_, num_heads_ = hidden_dim, num_heads
+                            if layout == "s:b:h1":
+                                shapes = [
+                                    (seq_len, bs, hidden_dim),
+                                ]
+                                num_heads_ = None
+                            elif layout == "b:n:s:s":
+                                shapes = [
+                                    (bs, num_heads, seq_len, seq_len),
+                                ]
+                                hidden_dim_ = None
+                            else:
+                                raise ValueError(f"Unsupport Dropout layout: {layout}")
 
-                        query_key = OfflineDataRecorder.get_query_key(
-                            "dropout", bs, seq_len, hidden_dim, None, layout,
-                        )
-                        if query_key in self.recorder.data and not self.configs.force_overwrite:
-                            logger.info(f"Cached Dropout profile: layout: {layout}, batch_size: {bs}, " + 
-                                        f"seq_len: {seq_len}, hd: {hidden_dim}")
-                            continue
-                        
-                        # Reset
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        torch.cuda.synchronize()
+                            query_key = OfflineDataRecorder.get_query_key(
+                                "dropout", bs, seq_len, hidden_dim_, None, layout, num_heads_,
+                            )
+                            if query_key in self.recorder.data and not self.configs.force_overwrite:
+                                logger.info(f"Cached Dropout profile: layout: {layout}, batch_size: {bs}, " + 
+                                            f"seq_len: {seq_len}, hd: {hidden_dim_}, #attn_heads: {num_heads_}")
+                                continue
+                            
+                            # Reset
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
 
-                        op_latency = self._benchmark_one_op(
-                            opcode="dropout", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
-                            num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
-                        )
-                        logger.info(f"==========> Dropout profile: layout: {layout}, batch_size: {bs}, " + 
-                                    f"seq_len: {seq_len}, hd: {hidden_dim}, latency (ms): {op_latency}")
-                        self.recorder.write_one_entry(query_key, op_latency, None)
+                            op_latency = self._benchmark_one_op(
+                                opcode="dropout", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                                num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                            )
+                            logger.info(f"==========> Dropout profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"seq_len: {seq_len}, hd: {hidden_dim_}, #attn_heads: {num_heads_}, latency (ms): {op_latency}")
+                            self.recorder.write_one_entry(query_key, op_latency, None)
 
     def _profile_all_masked_fill(
         self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
@@ -628,6 +665,41 @@ class CriusOfflineDataManager:
                             num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
                         )
                         logger.info(f"==========> MaskedFill_ profile: layout: {layout}, batch_size: {bs}, " + 
+                                    f"seq_len: {seq_len}, #attn_heads: {num_heads}, latency (ms): {op_latency}")
+                        self.recorder.write_one_entry(query_key, op_latency, None)
+
+    def _profile_all_softmax(
+        self, op_func: Callable, batch_sizes: List[int], seq_lens: List[int], dtype, device, 
+    ) -> None:
+        for bs in batch_sizes:
+            for seq_len in seq_lens:
+                for num_heads in self.configs.softmax_op_num_attn_heads:
+                    for layout in self.configs.softmax_layouts:
+                        if layout == "b:n:s:s":
+                            shapes = [
+                                (bs, num_heads, seq_len, seq_len),
+                            ]
+                        else:
+                            raise ValueError(f"Unsupport Softmax layout: {layout}")
+
+                        query_key = OfflineDataRecorder.get_query_key(
+                            "softmax", bs, seq_len, None, None, layout, num_heads,
+                        )
+                        if query_key in self.recorder.data and not self.configs.force_overwrite:
+                            logger.info(f"Cached Softmax profile: layout: {layout}, batch_size: {bs}, " + 
+                                        f"seq_len: {seq_len}, #attn_heads: {num_heads}")
+                            continue
+                        
+                        # Reset
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize()
+
+                        op_latency = self._benchmark_one_op(
+                            opcode="softmax", op_func=op_func, shapes=shapes, num_warmup_steps=self.configs.num_warmup_steps, 
+                            num_profile_steps=self.configs.num_profile_steps, dtype=dtype, device=device,
+                        )
+                        logger.info(f"==========> Softmax profile: layout: {layout}, batch_size: {bs}, " + 
                                     f"seq_len: {seq_len}, #attn_heads: {num_heads}, latency (ms): {op_latency}")
                         self.recorder.write_one_entry(query_key, op_latency, None)
 

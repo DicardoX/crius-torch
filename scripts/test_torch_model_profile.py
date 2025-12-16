@@ -162,7 +162,13 @@ class TorchModelProfileTest(unittest.TestCase):
             dropout_op_hidden_dims=[
                 2048, 4096, 8192,
             ],
+            dropout_op_num_attn_heads=[
+                16, 32,
+            ],
             masked_fill_op_num_attn_heads=[
+                16, 32,
+            ],
+            softmax_op_num_attn_heads=[
                 16, 32,
             ],
             comm_data_sizes = [2**i for i in range(1,31)] + [
@@ -181,7 +187,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="baddbmm")
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
-        offline_profiler.profile(opcode="masked_fill_")
+        # offline_profiler.profile(opcode="masked_fill_")
+        offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
 
@@ -224,7 +231,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
-        global_configs.enable_backward_graph_generation = True
+        # global_configs.enable_backward_graph_generation = True
+        global_configs.enable_backward_graph_generation = False
         if device == "cpu":
             logger.warning(
                 "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +

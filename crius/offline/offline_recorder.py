@@ -99,9 +99,16 @@ class OfflineDataRecorder:
                 batch_size *= num_attn_heads
                 left_op_hidden_dim = left_op_hidden_dim // num_attn_heads
             return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout_[{layout}]"
-        elif op_type in ("layernorm", "dropout"):
+        elif op_type == "layernorm":
             return f"{op_type}_b{batch_size}_s{seq_len}_h{left_op_hidden_dim}_layout_[{layout}]"
-        elif op_type == "masked_fill_":
+        elif op_type == "dropout":
+            if left_op_hidden_dim is None:
+                return f"{op_type}_b{batch_size}_s{seq_len}_n_{num_attn_heads}_layout_[{layout}]"
+            elif num_attn_heads is None:
+                return f"{op_type}_b{batch_size}_s{seq_len}_h{left_op_hidden_dim}_layout_[{layout}]"
+            else:
+                raise ValueError("For Dropout op, either left_op_hidden_dim or num_attn_heads should be None.")
+        elif op_type in ("masked_fill_", "softmax",):
             return f"{op_type}_b{batch_size}_s{seq_len}_n{num_attn_heads}_layout_[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
