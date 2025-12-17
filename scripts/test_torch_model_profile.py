@@ -215,9 +215,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
@@ -226,9 +226,9 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -517,9 +517,9 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 16
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
@@ -630,7 +630,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
         )
         trainer.train()
 
