@@ -71,6 +71,10 @@ class OfflineProfileConfigs:
     """ Use transposed weight tensor (then call weight.t() in the operator), which is a 
     common practice in Megatron for GEMM operators."""
 
+    use_megatron_attention_softmax_in_fp32: bool = True
+    """ If True, run attention masking (i.e., masked_fill_) and softmax in fp32. This should 
+    be True if apply_query_key_layer_scaling is True. """
+
     force_overwrite: bool = False
     """ Forcibly overwrite all profiled data and re-run. """
 
@@ -352,7 +356,11 @@ class CriusOfflineDataManager:
             args = (left_op, )
 
         elif opcode == "masked_fill_":
-            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
+                if not self.configs.use_torch_empty_to_init_weight else \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+            if self.configs.use_megatron_attention_softmax_in_fp32 and dtype in (torch.float16, torch.bfloat16):
+                left_op = left_op.float()   # Convert to fp32 for masked_fill_
             mask = torch.ones(shapes[1], dtype=torch.bool, device=device)
             value = -10000.0
             args = (left_op, mask, value, )
@@ -363,6 +371,8 @@ class CriusOfflineDataManager:
             left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
                 if not self.configs.use_torch_empty_to_init_weight else \
                 torch.empty(shapes[0], dtype=dtype, device=device)
+            if self.configs.use_megatron_attention_softmax_in_fp32 and dtype in (torch.float16, torch.bfloat16):
+                left_op = left_op.float()   # Convert to fp32 for softmax
             args = (left_op, )
 
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):

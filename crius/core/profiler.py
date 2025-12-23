@@ -124,7 +124,7 @@ class CriusDistProfiler:
 
         # Step 2. Compute per-stage latency
         stage_latencies, grad_sync_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
-        if not global_configs.enable_backward_graph_generation:
+        if not global_configs.enable_backward_graph_generation and parallelism_plan.data_parallel_degree > 1:
             # Estimate grad sync latencies in DP backward pass
             grad_sync_latencies = self._estimate_grad_sync_latencies_in_dp_backward(
                 graph, parallelism_plan, params_dtype,
@@ -261,7 +261,7 @@ class CriusDistProfiler:
 
         parallelism = node.node_parallelism if forced_parallelism is None else forced_parallelism
         if parallelism == "tp":
-            num_comm_nodes = np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node)
+            num_comm_nodes = int(np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node))
             return (parallelism_plan.tensor_parallel_degree, num_comm_nodes)
         elif parallelism == "dp":
             num_dp_ranks_per_node = int(np.ceil(global_configs.num_devices_per_node / (

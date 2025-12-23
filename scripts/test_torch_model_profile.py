@@ -80,17 +80,26 @@ class TorchModelProfileTest(unittest.TestCase):
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
 
-        # GEMM
-        left_op = torch.randn((1024, 4, 4096), device="cuda", dtype=torch.float16)
-        right_op = torch.empty((6144, 4096), device="cuda", dtype=torch.float16) \
-            if use_torch_empty_to_init_weight else torch.randn((6144, 4096), device="cuda", dtype=torch.float16)
+        # # GEMM
+        # left_op = torch.randn((1024, 4, 4096), device="cuda", dtype=torch.float16)
+        # right_op = torch.empty((6144, 4096), device="cuda", dtype=torch.float16) \
+        #     if use_torch_empty_to_init_weight else torch.randn((6144, 4096), device="cuda", dtype=torch.float16)
+        # torch.cuda.synchronize()
+
+        # Masked fill
+        input_op = torch.empty((4, 32, 1024, 1024), device="cuda", dtype=torch.float16)
+        input_op = input_op.float()  # Ensure fp32 input
+        mask = torch.ones((4, 1, 1024, 1024), device="cuda", dtype=torch.bool)
+        value = -10000.0
         torch.cuda.synchronize()
 
         for _ in range(num_warmup_steps):
             if use_transposed_weight:
-                _ = torch.matmul(left_op, right_op.t())
+                # _ = torch.matmul(left_op, right_op.t())
+                input_op.masked_fill_(mask, value)
             else:
-                _ = torch.matmul(left_op, right_op)
+                # _ = torch.matmul(left_op, right_op)
+                input_op.masked_fill_(mask, value)
         torch.cuda.synchronize()
         
         if use_pytorch_profiler:
@@ -111,9 +120,11 @@ class TorchModelProfileTest(unittest.TestCase):
                 prof.step()
             
             if use_transposed_weight:
-                _ = torch.matmul(left_op, right_op.t())
+                # _ = torch.matmul(left_op, right_op.t())
+                input_op.masked_fill_(mask, value)
             else:
-                _ = torch.matmul(left_op, right_op)
+                # _ = torch.matmul(left_op, right_op)
+                input_op.masked_fill_(mask, value)
         
         end_event.record()
         end_event.synchronize()
@@ -123,9 +134,9 @@ class TorchModelProfileTest(unittest.TestCase):
             prof.export_chrome_trace('/app/torch_op_trace.json')
 
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
-        print(f"\n=======> GEMM operator latency: {(op_latency):.3f} ms")
+        print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -141,9 +152,10 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
+            use_megatron_attention_softmax_in_fp32=True,
             gemm_left_op_hidden_dims=[      # Only consider forward ops
                 2048, 4096, 8192, 16384, 
             ],
@@ -187,12 +199,12 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="baddbmm")
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
-        offline_profiler.profile(opcode="masked_fill_")
-        # offline_profiler.profile(opcode="softmax")
+        # offline_profiler.profile(opcode="masked_fill_")
+        offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -228,9 +240,10 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.num_nodes = 1
         global_configs.num_devices_per_node = 2
+
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -632,7 +645,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
         )
         trainer.train()
 
