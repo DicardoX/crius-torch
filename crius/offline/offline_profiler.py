@@ -352,9 +352,7 @@ class CriusOfflineDataManager:
             args = (left_op, )
 
         elif opcode == "masked_fill_":
-            left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
-                if not self.configs.use_torch_empty_to_init_weight else \
-                torch.empty(shapes[0], dtype=dtype, device=device)
+            left_op = torch.randn(shapes[0], dtype=dtype, device=device)
             mask = torch.ones(shapes[1], dtype=torch.bool, device=device)
             value = -10000.0
             args = (left_op, mask, value, )

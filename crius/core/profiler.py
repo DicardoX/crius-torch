@@ -20,7 +20,7 @@ from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
 # from crius.offline.offline_profiler import CriusOfflineDataManager
 from crius.offline.offline_recorder import OfflineDataRecorder
-from crius.global_envs import logger, global_configs
+from crius.global_envs import logger, global_configs, dtype_to_bytes
 
 
 class CriusDistProfiler:
@@ -71,7 +71,8 @@ class CriusDistProfiler:
         Returns:
             e2e_latency: End-to-end pipeline latency of the model in milliseconds, or None
         """
-
+        
+        params_dtype = getattr(getattr(model, "config", {}), "params_dtype", torch.float16)
         # Step 0. (Optional) Compile the model into IR graph
         if graph is None:
             assert base_input_args is not None and base_input_kwargs is not None, \
@@ -123,6 +124,13 @@ class CriusDistProfiler:
 
         # Step 2. Compute per-stage latency
         stage_latencies, grad_sync_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
+        if not global_configs.enable_backward_graph_generation:
+            # Estimate grad sync latencies in DP backward pass
+            grad_sync_latencies = self._estimate_grad_sync_latencies_in_dp_backward(
+                graph, parallelism_plan, params_dtype,
+            )
+        logger.info(f"=========> Per-stage latencies (ms): {stage_latencies}")
+        logger.info(f"=========> Per-stage grad sync latencies (ms): {grad_sync_latencies}")
 
         # Step 3. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
@@ -144,7 +152,7 @@ class CriusDistProfiler:
                         # Query the latency from the profiled data
                         input_shapes, output_shapes = node.input_shapes, node.output_shapes
                         batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, layout = None, None, None, None, None
-                        comm_group_size, comm_data_size = None, None
+                        comm_group_size, num_comm_nodes, comm_data_size = None, None, None
                         assert parallelism_plan.num_attn_heads % parallelism_plan.tensor_parallel_degree == 0, \
                             f"The number of attention heads should be divisible by TP size."
                         num_attn_heads_per_rank = parallelism_plan.num_attn_heads // parallelism_plan.tensor_parallel_degree
@@ -154,7 +162,7 @@ class CriusDistProfiler:
                                 continue    # This node is a not-used placeholder (not defined in comm op insertion 
                                             # rules) in model forward definition.
 
-                            comm_group_size = self._get_comm_group_size_one_node(node, parallelism_plan)
+                            comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(node, parallelism_plan)
                             comm_data_size = np.prod(list(input_shapes))
                         
                         elif node.layer_type in ("gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "softmax"):
@@ -196,7 +204,7 @@ class CriusDistProfiler:
 
                         query_key = OfflineDataRecorder.get_query_key(
                             node.layer_type, batch_size, seq_len, left_op_hidden_dim, right_op_hidden_dim, 
-                            node.layout, num_attn_heads_per_rank, global_configs.num_nodes, comm_group_size, 
+                            node.layout, num_attn_heads_per_rank, num_comm_nodes, comm_group_size, 
                             comm_data_size, attn_head_split=False,
                         )
 
@@ -231,7 +239,7 @@ class CriusDistProfiler:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
                     accumulated_latency += node.latency
                     print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
-            # exit(0)
+            exit(0)
 
         return graph, bw_graph
     
@@ -246,15 +254,23 @@ class CriusDistProfiler:
                     return (i, j)
         return None
     
-    def _get_comm_group_size_one_node(self, node: IRNode, parallelism_plan: ParallelismPlan) -> int:
-        """ Get the communication group size for one node. """
+    def _get_comm_group_size_and_count(
+        self, node: IRNode, parallelism_plan: ParallelismPlan, forced_parallelism: str = None
+    ) -> Tuple[int, int]:
+        """ Get the communication group size and number of GPU nodes. """
 
-        if node.node_parallelism == "tp":
-            return parallelism_plan.tensor_parallel_degree
-        elif node.node_parallelism == "dp":
-            return parallelism_plan.data_parallel_degree
-        elif node.node_parallelism == "pp":
-            return 2    # P2P communication
+        parallelism = node.node_parallelism if forced_parallelism is None else forced_parallelism
+        if parallelism == "tp":
+            num_comm_nodes = np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node)
+            return (parallelism_plan.tensor_parallel_degree, num_comm_nodes)
+        elif parallelism == "dp":
+            num_dp_ranks_per_node = int(np.ceil(global_configs.num_devices_per_node / (
+                parallelism_plan.pipeline_parallel_degree * parallelism_plan.tensor_parallel_degree)
+            ))
+            num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
+            return (parallelism_plan.data_parallel_degree, num_comm_nodes)
+        elif parallelism == "pp":
+            return (2, 2)   # P2P communication, FIXME(chunyu): Currently assumed as 2 nodes
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")
 
@@ -294,9 +310,49 @@ class CriusDistProfiler:
                     # Normal backward nodes
                     stage_latencies[node.stage_index][1] += node.latency
 
-        logger.info(f"=========> Per-stage latencies (ms): {stage_latencies}")
-        logger.info(f"=========> Per-stage grad sync latencies (ms): {grad_sync_latencies}")
         return stage_latencies, grad_sync_latencies
+
+    def _estimate_grad_sync_latencies_in_dp_backward(
+        self, graph: IRGraph, parallelism_plan: ParallelismPlan, params_dtype: torch.dtype,
+    ) -> List[float]:
+        """ Estimate gradient synchronization latencies in data-parallel backward pass, used when 
+        `global_configs.enable_backward_graph_generation` is disabled.
+        
+        Args:
+            graph: Forward IR graph.
+            parallelism_plan: The parallelism plan for the model to be profiled with.
+            params_dtype: Data type of model parameters.
+        """
+
+        if (
+            parallelism_plan is None or
+            parallelism_plan.data_parallel_degree == 1 or
+            graph is None
+        ):
+            return []    # No gradient synchronization needed
+
+        comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "dp")
+        nbytes_per_numel = dtype_to_bytes[params_dtype]
+        grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
+        for node in graph.nodes:
+            if node.layer_type == "gemm":
+                # Estimate the weight gradient size of this gemm node
+                assert len(node.input_shapes) == 2, "Invalid gemm input shapes."
+                weight_numel = np.prod(node.input_shapes[1])
+                comm_data_size = weight_numel * nbytes_per_numel
+                query_key = OfflineDataRecorder.get_query_key(
+                    "all_reduce", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
+                )
+                node_grad_sync_latency = 0.0
+                if self._profiled_data is not None and query_key in self._profiled_data:
+                    node_grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
+                else:
+                    logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
+                                   f"using default latency {node_grad_sync_latency}ms.")
+                grad_sync_latencies[node.stage_index] += node_grad_sync_latency
+
+
+        return grad_sync_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
         self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], 

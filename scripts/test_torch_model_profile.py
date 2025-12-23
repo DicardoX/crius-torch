@@ -125,7 +125,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> GEMM operator latency: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -141,7 +141,7 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             gemm_left_op_hidden_dims=[      # Only consider forward ops
@@ -173,7 +173,7 @@ class TorchModelProfileTest(unittest.TestCase):
             ],
             comm_data_sizes = [2**i for i in range(1,31)] + [
                 # Special volumes
-                204800000, 50331648,
+                204800000, 409600000, 50331648, 100663296,
             ],
         )
         offline_profiler = CriusOfflineDataManager(
@@ -187,12 +187,12 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="baddbmm")
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
-        # offline_profiler.profile(opcode="masked_fill_")
-        offline_profiler.profile(opcode="softmax")
+        offline_profiler.profile(opcode="masked_fill_")
+        # offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -226,6 +226,8 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
         
+        global_configs.num_nodes = 1
+        global_configs.num_devices_per_node = 2
         global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 2
@@ -529,9 +531,9 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
 
         # Get number of microbatches
@@ -630,7 +632,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
         )
         trainer.train()
 
