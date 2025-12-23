@@ -249,7 +249,7 @@ class CriusOfflineDataManager:
     def profile(self, opcode: str = "gemm") -> None:
         """ Profile entrypoint. """
 
-        if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+        if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", "p2p", ):
             return self._profile_communication(opcode)
         
         num_warmup_steps = self.configs.num_warmup_steps
@@ -738,6 +738,8 @@ class CriusOfflineDataManager:
             torch.distributed.barrier()
 
         world_size = int(os.environ["WORLD_SIZE"])
+        if opcode == "p2p":
+            assert world_size == 2, "P2P communication profiling requires exactly 2 processes."
         local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
         rank = int(os.environ["LOCAL_RANK"])
         num_nodes = (world_size - 1) // local_world_size + 1
@@ -760,10 +762,17 @@ class CriusOfflineDataManager:
             torch.cuda.synchronize()
             __sync_barrier()
 
-            op_latency = self._benchmark_one_op(
-                opcode=opcode, op_func=op_func, shapes=[(tensor_size, ), ], num_warmup_steps=num_warmup_steps, 
-                num_profile_steps=num_profile_steps, dtype=dtype, device=torch.cuda.current_device(),
-            )
+
+            if opcode != "p2p":
+                op_latency = self._benchmark_one_op(
+                    opcode=opcode, op_func=op_func, shapes=[(tensor_size, ), ], num_warmup_steps=num_warmup_steps, 
+                    num_profile_steps=num_profile_steps, dtype=dtype, device=torch.cuda.current_device(),
+                )
+            else:
+                op_latency = self._benchmark_one_p2p(
+                    op_func=op_func, shapes=[(tensor_size, ), ], num_warmup_steps=num_warmup_steps, 
+                    num_profile_steps=num_profile_steps, dtype=dtype, device=torch.cuda.current_device(),
+                )
 
             if rank == 0:
                 logger.info(
@@ -775,4 +784,42 @@ class CriusOfflineDataManager:
         __cleanup()
         if rank == 0:
             self.recorder.store()
-        
+    
+    def _benchmark_one_p2p(
+        self, op_func: Callable, shapes: List[tuple], num_warmup_steps: int, 
+        num_profile_steps: int, dtype, device,
+    ):
+        """ Benchmark point-to-point communication between two ranks. """
+        rank = torch.distributed.get_rank()
+        tensor = torch.randn(shapes[0], dtype=dtype).cuda()
+
+        def __exec():
+            if rank == 0:
+                torch.distributed.send(tensor, dst=1)   # Bidirectional send-recv
+                torch.distributed.recv(tensor, src=1)
+            elif rank == 1:
+                torch.distributed.recv(tensor, src=0)
+                torch.distributed.send(tensor, dst=0)
+
+        # Warmup
+        for _ in range(num_warmup_steps):
+            __exec()
+        torch.cuda.synchronize()
+
+        # Timer events
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+
+        # Benchmark
+        start_event.record()
+        for _ in range(num_profile_steps):
+            __exec()
+        end_event.record()
+        torch.cuda.synchronize()
+
+        op_latency = start_event.elapsed_time(end_event) / (2 * num_profile_steps)   # Divide by 2 for send and recv
+        latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
+        torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.MAX)
+        op_latency = latency_tensor.item()    # Use the maximum latency across both ranks.
+
+        return op_latency

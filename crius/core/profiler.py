@@ -124,6 +124,7 @@ class CriusDistProfiler:
 
         # Step 2. Compute per-stage latency
         stage_latencies, grad_sync_latencies = self._compute_stage_latencies(graph, parallelism_plan, bw_graph)  
+        p2p_latencies = self._estimate_p2p_latencies_in_pp(graph, parallelism_plan, params_dtype)
         if not global_configs.enable_backward_graph_generation and parallelism_plan.data_parallel_degree > 1:
             # Estimate grad sync latencies in DP backward pass
             grad_sync_latencies = self._estimate_grad_sync_latencies_in_dp_backward(
@@ -131,10 +132,11 @@ class CriusDistProfiler:
             )
         logger.info(f"=========> Per-stage latencies (ms): {stage_latencies}")
         logger.info(f"=========> Per-stage grad sync latencies (ms): {grad_sync_latencies}")
-
+        logger.info(f"=========> Per-stage P2P latencies (ms): {p2p_latencies}")
+        
         # Step 3. Model end-to-end pipeline latency
         e2e_latency = self._model_e2e_pipeline_latency_with_oom_check(
-            stage_latencies, grad_sync_latencies, parallelism_plan, only_forward,
+            stage_latencies, grad_sync_latencies, p2p_latencies, parallelism_plan, only_forward,
         )
         return e2e_latency
 
@@ -211,6 +213,7 @@ class CriusDistProfiler:
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
                         elif query_key is not None:
+                            raise ValueError(f"Query key {query_key} not found in profiled data.")
                             logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
                     
                     setattr(node, "latency", node_latency)
@@ -270,7 +273,7 @@ class CriusDistProfiler:
             num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
             return (parallelism_plan.data_parallel_degree, num_comm_nodes)
         elif parallelism == "pp":
-            return (2, 2)   # P2P communication, FIXME(chunyu): Currently assumed as 2 nodes
+            return (2, 1)   # P2P communication, FIXME(chunyu): Currently assumed as 1 node
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")
 
@@ -347,28 +350,74 @@ class CriusDistProfiler:
                 if self._profiled_data is not None and query_key in self._profiled_data:
                     node_grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
                 else:
+                    raise ValueError(f"Grad sync query key {query_key} not found " + 
+                                     f"in profiled data for grad sync estimation.")
                     logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
                                    f"using default latency {node_grad_sync_latency}ms.")
+                                   
                 grad_sync_latencies[node.stage_index] += node_grad_sync_latency
-
 
         return grad_sync_latencies
 
+    def _estimate_p2p_latencies_in_pp(
+        self, graph: IRGraph, parallelism_plan: ParallelismPlan, params_dtype: torch.dtype,
+    ) -> List[float]:
+        """ Estimate P2P communication latencies in pipeline-parallel forward/backward pass. """
+        
+        if (
+            parallelism_plan is None or
+            parallelism_plan.pipeline_parallel_degree == 1 or
+            graph is None
+        ):
+            return []    # No P2P communication needed
+
+        comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp")
+        nbytes_per_numel = dtype_to_bytes[params_dtype]
+        p2p_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
+        cur_stage_index = 0
+        prev_node = None
+        for node in graph.nodes:
+            if node.stage_index != cur_stage_index:
+                print(prev_node.target, prev_node.output_shapes)
+                assert node.stage_index == cur_stage_index + 1, "Invalid stage index increment."        
+                p2p_numel = np.prod(prev_node.input_shapes[0])
+                comm_data_size = p2p_numel * nbytes_per_numel
+                query_key = OfflineDataRecorder.get_query_key(
+                    "p2p", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
+                )
+                node_p2p_latency = 0.0
+                if self._profiled_data is not None and query_key in self._profiled_data:
+                    node_p2p_latency = self._profiled_data[query_key]["latency_ms"]
+                else:
+                    raise ValueError(f"P2P communication query key {query_key} not found " + 
+                                        f"in profiled data for P2P latency estimation.")
+                    logger.warning(f"Query key {query_key} not found in profiled data for P2P latency estimation, " + 
+                                    f"using default latency {node_p2p_latency}ms.")
+                p2p_latencies[cur_stage_index] += node_p2p_latency
+                cur_stage_index = node.stage_index
+            
+            prev_node = node
+        
+        # FIXME(chunyu): Currently the last node in each PP stage is considered as getattr.
+        exit(0)
+
+        return p2p_latencies
+
     def _model_e2e_pipeline_latency_with_oom_check(
-        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], 
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[float],
         parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
         
         if parallelism_plan.pipeline_type == "1f1b":
             return self._model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-                stage_latencies, grad_sync_latencies, parallelism_plan, only_forward,
+                stage_latencies, grad_sync_latencies, p2p_latencies, parallelism_plan, only_forward,
             )
         else:
             raise ValueError(f"Pipeline type {parallelism_plan.pipeline_type} is not supported yet.")
     
     def _model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], 
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[float],
         parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
@@ -387,12 +436,27 @@ class CriusDistProfiler:
 
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree
+        overlap_p2p_comm = parallelism_plan.pipeline_overlap_p2p_comm
+        assert not overlap_p2p_comm, "P2P communication overlapping with computation is not currently supported yet."
 
         if only_forward:
             # If only forward pass is profiled, we only consider the steady phase.
             fw_lats = [_l[0] for _l in stage_latencies]
+            if not overlap_p2p_comm:
+                for i in range(len(p2p_latencies)):
+                    fw_lats[i + 1] += p2p_latencies[i]
+            else:
+                raise NotImplementedError
+
             t_fw = np.max(fw_lats) * (num_microbatches - 1) + np.sum(fw_lats)
             return t_fw
+        
+        if not overlap_p2p_comm:
+            for i in range(len(p2p_latencies)):
+                stage_latencies[i + 1][0] += p2p_latencies[i]
+                stage_latencies[i + 1][1] += p2p_latencies[i]
+        else:
+            raise NotImplementedError
 
         # Phase 1. Warmup
         t_warmup = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])

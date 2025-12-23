@@ -200,9 +200,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
         # offline_profiler.profile(opcode="masked_fill_")
-        offline_profiler.profile(opcode="softmax")
+        # offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="p2p")
 
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -274,6 +275,7 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
+            pipeline_overlap_p2p_comm=False,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,
