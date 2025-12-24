@@ -378,7 +378,6 @@ class CriusDistProfiler:
         prev_node = None
         for node in graph.nodes:
             if node.stage_index != cur_stage_index:
-                print(prev_node.target, prev_node.output_shapes)
                 assert node.stage_index == cur_stage_index + 1, "Invalid stage index increment."        
                 p2p_numel = np.prod(prev_node.input_shapes[0])
                 comm_data_size = p2p_numel * nbytes_per_numel
@@ -397,9 +396,6 @@ class CriusDistProfiler:
                 cur_stage_index = node.stage_index
             
             prev_node = node
-        
-        # FIXME(chunyu): Currently the last node in each PP stage is considered as getattr.
-        exit(0)
 
         return p2p_latencies
 

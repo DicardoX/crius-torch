@@ -115,12 +115,11 @@ class CriusParallelPlanner:
 
         def __annotate_node_stage_index(num_nodes_per_stage_: List[int], graph_):
             this_stage_node_num, cur_stage_index = 0, 0
-            for node in graph_.nodes:
+            for i, node in enumerate(graph_.nodes):
                 this_stage_node_num += 1
                 if this_stage_node_num > num_nodes_per_stage_[cur_stage_index]:
                     cur_stage_index += 1
-                    this_stage_node_num = 0
-                
+                    this_stage_node_num = 1
                 setattr(node, "stage_index", cur_stage_index)
 
         # Partition forward graph
@@ -130,22 +129,25 @@ class CriusParallelPlanner:
                 # Manually specify the boundary markers to indicate the start and end of a layer
                 assert parallelism_plan.pipeline_boundary_start_marker is not None and parallelism_plan.pipeline_boundary_end_marker is not None, \
                     f"When using boundary markers to partition pipeline layers, users must specify the start and end markers."
-                num_fw_nodes_per_layer = [0 for _ in range(parallelism_plan.num_layers)]
-                cur_layer_index, num_marked_nodes = -1, 0
-                for node in graph.nodes:
-                    if (
-                        "L__self___module" in str(node.target) and
-                        any([_marker in str(node.target) for _marker in parallelism_plan.pipeline_boundary_start_marker])
-                    ):
+                num_fw_nodes_per_layer_ = [0 for _ in range(parallelism_plan.num_layers + 1)]    # Plus pre-process layer
+                cur_layer_index, num_marked_nodes = 0, 0
+                for i, node in enumerate(graph.nodes):
+                    if parallelism_plan.pipeline_boundary_start_marker[num_marked_nodes] in str(node.target):
                         num_marked_nodes += 1
                     else:
                         num_marked_nodes = 0
                     
                     if num_marked_nodes == len(parallelism_plan.pipeline_boundary_start_marker):
+                        # Next layer
                         cur_layer_index += 1
+                        num_fw_nodes_per_layer_[cur_layer_index] += (num_marked_nodes - 1)
+                        num_fw_nodes_per_layer_[cur_layer_index - 1] -= (num_marked_nodes - 1)   # Revert mis-added nodes
                         num_marked_nodes = 0
                     
-                    num_fw_nodes_per_layer[max(cur_layer_index, 0)] += 1
+                    num_fw_nodes_per_layer_[cur_layer_index] += 1
+
+                # Merge pre-process layer into layer 0
+                num_fw_nodes_per_layer = [num_fw_nodes_per_layer_[0] + num_fw_nodes_per_layer_[1]] + num_fw_nodes_per_layer_[2:]
 
                 assert parallelism_plan.num_layers % parallelism_plan.pipeline_parallel_degree == 0, \
                     f"The number of layers ({parallelism_plan.num_layers}) must be divisible by the pipeline parallel degree ({parallelism_plan.pipeline_parallel_degree})."
@@ -156,6 +158,7 @@ class CriusParallelPlanner:
                 __annotate_node_stage_index(num_fw_nodes_per_stage, graph)
 
             elif parallelism_plan.pipeline_num_preprocess_nodes >= 0 and parallelism_plan.pipeline_num_postprocess_nodes >= 0:
+                raise DeprecationWarning("Currently this option is disabled.")
                 # Manually specify the number of preprocess/postprocess nodes before looped stages
                 # assert parallelism_plan.pipeline_num_preprocess_nodes >=0 and parallelism_plan.pipeline_num_postprocess_nodes >= 0, \
                 #     f"In uniform pipeline partition mode, users must specify the number of pre/post-process nodes."
