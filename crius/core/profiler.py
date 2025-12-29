@@ -370,6 +370,12 @@ class CriusDistProfiler:
             graph is None
         ):
             return []    # No P2P communication needed
+        
+        if parallelism_plan.pipeline_forced_p2p_comm_overhead_ms > 0:
+            return [
+                parallelism_plan.pipeline_forced_p2p_comm_overhead_ms 
+                    for _ in range(parallelism_plan.pipeline_parallel_degree - 1)
+            ]
 
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp")
         nbytes_per_numel = dtype_to_bytes[params_dtype]

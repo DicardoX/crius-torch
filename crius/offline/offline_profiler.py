@@ -316,6 +316,8 @@ class CriusOfflineDataManager:
         num_profile_steps: int, dtype, device,
     ):
         """ Benchmark one operator under specific configurations. """
+
+        kwargs = {}
         if opcode in ("gemm", "bmm"):
             left_op = torch.randn(shapes[0], dtype=dtype, device=device)
             right_op = torch.randn(shapes[1], dtype=dtype, device=device) \
@@ -334,7 +336,6 @@ class CriusOfflineDataManager:
                 args = (left_op, right_op, )
         
         elif opcode == "baddbmm":
-            kwargs = {}
             left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
                 if not self.configs.use_torch_empty_to_init_weight else \
                 torch.empty(shapes[0], dtype=dtype, device=device)
@@ -793,19 +794,46 @@ class CriusOfflineDataManager:
     
     def _benchmark_one_p2p(
         self, op_func: Callable, shapes: List[tuple], num_warmup_steps: int, 
-        num_profile_steps: int, dtype, device,
+        num_profile_steps: int, dtype, device, batched_p2p_comm: bool = True,
     ):
         """ Benchmark point-to-point communication between two ranks. """
         rank = torch.distributed.get_rank()
-        tensor = torch.randn(shapes[0], dtype=dtype).cuda()
+        send_tensor, recv_tensor = torch.randn(shapes[0], dtype=dtype).cuda(), torch.randn(shapes[0], dtype=dtype).cuda()
 
         def __exec():
-            if rank == 0:
-                torch.distributed.send(tensor, dst=1)   # Bidirectional send-recv
-                torch.distributed.recv(tensor, src=1)
-            elif rank == 1:
-                torch.distributed.recv(tensor, src=0)
-                torch.distributed.send(tensor, dst=0)
+            if batched_p2p_comm:
+                ops = []
+                if rank == 0:
+                    send_next_op = torch.distributed.P2POp(
+                        torch.distributed.isend, send_tensor, 1,
+                    )
+                    recv_next_op = torch.distributed.P2POp(
+                        torch.distributed.irecv, recv_tensor, 1,
+                    )
+                    ops.append(send_next_op)
+                    ops.append(recv_next_op)
+                elif rank == 1:
+                    recv_prev_op = torch.distributed.P2POp(
+                        torch.distributed.irecv, recv_tensor, 0,
+                    )
+                    send_prev_op = torch.distributed.P2POp(
+                        torch.distributed.isend, send_tensor, 0,
+                    )
+                    ops.append(recv_prev_op)
+                    ops.append(send_prev_op)
+                
+                reqs = torch.distributed.batch_isend_irecv(ops)
+                for req in reqs:
+                    req.wait()
+                reqs = None
+
+            else:
+                if rank == 0:
+                    send_req = torch.distributed.isend(send_tensor, dst=1)
+                    send_req.wait()
+                elif rank == 1:
+                    recv_req = torch.distributed.irecv(recv_tensor, src=0)
+                    recv_req.wait()
 
         # Warmup
         for _ in range(num_warmup_steps):
@@ -823,7 +851,7 @@ class CriusOfflineDataManager:
         end_event.record()
         torch.cuda.synchronize()
 
-        op_latency = start_event.elapsed_time(end_event) / (2 * num_profile_steps)   # Divide by 2 for send and recv
+        op_latency = start_event.elapsed_time(end_event) / (num_profile_steps)   # Divide by 2 for send and recv
         latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
         torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.MAX)
         op_latency = latency_tensor.item()    # Use the maximum latency across both ranks.

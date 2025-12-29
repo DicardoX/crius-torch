@@ -149,7 +149,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -214,16 +214,16 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # offline_profiler.profile(opcode="gemm")
         # offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="baddbmm")
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
-        # offline_profiler.profile(opcode="p2p")
+        offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -247,7 +247,7 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         global_bs = 16
-        seq_len = 512
+        seq_len = 1024
         num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
@@ -260,8 +260,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_nodes = 1
         global_configs.num_devices_per_node = 2
 
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -283,6 +283,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_boundary_end_marker = ['dropout', 'add', ]
         # pipeline_boundary_start_marker = ['input_layernorm', ]
         pipeline_boundary_end_marker = ['final_layernorm', ]
+        pipeline_forced_p2p_comm_overhead_ms = 20.0
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -294,6 +295,7 @@ class TorchModelProfileTest(unittest.TestCase):
             data_parallel_degree=global_configs.data_parallel_size,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
+            pipeline_forced_p2p_comm_overhead_ms=pipeline_forced_p2p_comm_overhead_ms,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,
@@ -553,7 +555,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         model_type = ModelType.GPT
         global_bs = 16
-        seq_len = 512
+        seq_len = 1024
         num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
@@ -564,8 +566,8 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 2
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
