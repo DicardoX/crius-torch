@@ -131,6 +131,14 @@ class OfflineProfileConfigs:
     )
     """ Candidate layouts of BADDBMM operations. """
 
+    baddbmm_op_beta: float = 0.0
+    """ The beta value in `torch.baddbmm()`, default as 1.0 in `torch.baddbmm()`, yet set to 0.0 in 
+    Megatron's Dot Product Attention. When not set to 0.0, will implicitly trigger a 
+    `aten::copy_` before `cudaLaunchKernel`. """
+
+    baddbmm_op_alpa: float = 0.01
+    """ The alpa value in `torch.baddbmm()`. """
+
     # LAYERNORM
     layernorm_op_func: Callable = torch.nn.LayerNorm
     """ LayerNorm operator function. """
@@ -326,9 +334,7 @@ class CriusOfflineDataManager:
                 args = (left_op, right_op, )
         
         elif opcode == "baddbmm":
-            # FIXME(chunyu): Currently we ignore the transpose(0, 1) of baddbmm because it 
-            #                causes negligible latency difference.
-            # FIXME(chunyu): The measured latency is a little bit longer than the ground truth...
+            kwargs = {}
             left_op = torch.randn(shapes[0], dtype=dtype, device=device) \
                 if not self.configs.use_torch_empty_to_init_weight else \
                 torch.empty(shapes[0], dtype=dtype, device=device)
@@ -340,6 +346,7 @@ class CriusOfflineDataManager:
                 torch.empty(shapes[2], dtype=dtype, device=device)
             result_op = torch.zeros(shapes[3], dtype=dtype, device=device)
             args = (left_op, mid_op, right_op, )
+            kwargs = { "beta": self.configs.baddbmm_op_beta, "alpha": self.configs.baddbmm_op_alpa, }
         
         elif opcode == "layernorm":
             op_func = op_func(shapes[0][-1], eps=1e-5, device=device, dtype=dtype)
@@ -385,9 +392,9 @@ class CriusOfflineDataManager:
 
         def __exec():
             if opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
-                op_func(*args)
+                op_func(*args, **kwargs)
             else:
-                result_op = op_func(*args)
+                result_op = op_func(*args, **kwargs)
 
         # Warmup
         for _ in range(num_warmup_steps):

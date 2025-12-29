@@ -76,7 +76,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         num_warmup_steps = 100
         num_profile_steps = 1000
-        use_pytorch_profiler = True
+        use_pytorch_profiler = False
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
 
@@ -86,20 +86,29 @@ class TorchModelProfileTest(unittest.TestCase):
         #     if use_torch_empty_to_init_weight else torch.randn((6144, 4096), device="cuda", dtype=torch.float16)
         # torch.cuda.synchronize()
 
-        # Masked fill
-        input_op = torch.empty((4, 32, 1024, 1024), device="cuda", dtype=torch.float16)
-        input_op = input_op.float()  # Ensure fp32 input
-        mask = torch.ones((4, 1, 1024, 1024), device="cuda", dtype=torch.bool)
-        value = -10000.0
+        # BADDBMM
+        left_op = torch.empty((64, 512, 512), device=torch.cuda.current_device(), dtype=torch.float16)
+        mid_op = torch.empty((64, 512, 128), device=torch.cuda.current_device(), dtype=torch.float16)
+        right_op = torch.empty((64, 128, 512), device=torch.cuda.current_device(), dtype=torch.float16)
+        # result_op = torch.empty((64, 512, 512), device=torch.cuda.current_device(), dtype=torch.float16)
         torch.cuda.synchronize()
+
+        # # Masked fill
+        # input_op = torch.empty((4, 32, 1024, 1024), device="cuda", dtype=torch.float16)
+        # input_op = input_op.float()  # Ensure fp32 input
+        # mask = torch.ones((4, 1, 1024, 1024), device="cuda", dtype=torch.bool)
+        # value = -10000.0
+        # torch.cuda.synchronize()
 
         for _ in range(num_warmup_steps):
             if use_transposed_weight:
                 # _ = torch.matmul(left_op, right_op.t())
-                input_op.masked_fill_(mask, value)
+                # input_op.masked_fill_(mask, value)
+                _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
             else:
                 # _ = torch.matmul(left_op, right_op)
-                input_op.masked_fill_(mask, value)
+                # input_op.masked_fill_(mask, value)
+                _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
         torch.cuda.synchronize()
         
         if use_pytorch_profiler:
@@ -121,10 +130,14 @@ class TorchModelProfileTest(unittest.TestCase):
             
             if use_transposed_weight:
                 # _ = torch.matmul(left_op, right_op.t())
-                input_op.masked_fill_(mask, value)
+                # input_op.masked_fill_(mask, value)
+                with torch.no_grad():
+                    _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
             else:
                 # _ = torch.matmul(left_op, right_op)
-                input_op.masked_fill_(mask, value)
+                # input_op.masked_fill_(mask, value)
+                with torch.no_grad():
+                    _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
         
         end_event.record()
         end_event.synchronize()
@@ -148,13 +161,13 @@ class TorchModelProfileTest(unittest.TestCase):
             # min_seq_len=1024,
             # max_seq_len=2048,
             min_seq_len=128,
-            max_seq_len=128,
+            max_seq_len=2048,
             seq_len_step="power-of-2",
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
@@ -169,6 +182,9 @@ class TorchModelProfileTest(unittest.TestCase):
             ],
             baddbmm_op_hidden_dims=[
                 2048, 4096, 8192,
+            ],
+            num_attn_heads_per_rank=[
+                16, 32,
             ],
             layernorm_op_hidden_dims=[
                 2048, 4096, 8192,
@@ -198,13 +214,13 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # offline_profiler.profile(opcode="gemm")
         # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
+        offline_profiler.profile(opcode="baddbmm")
         # offline_profiler.profile(opcode="layernorm")
         # offline_profiler.profile(opcode="dropout")
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
@@ -230,12 +246,12 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 64
-        seq_len = 128
-        num_micro_batches = 16
+        global_bs = 16
+        seq_len = 512
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 4
         data_dtype = torch.long
         dtype = torch.float16
         device = "cpu"
@@ -536,20 +552,20 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 64
-        seq_len = 128
-        num_micro_batches = 16
+        global_bs = 16
+        seq_len = 512
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 4
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 2
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
@@ -649,7 +665,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
         )
         trainer.train()
 
