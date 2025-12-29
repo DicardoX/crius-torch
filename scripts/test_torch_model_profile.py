@@ -136,7 +136,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -145,14 +145,16 @@ class TorchModelProfileTest(unittest.TestCase):
             min_batch_size=4,
             max_batch_size=4,
             batch_size_step="power-of-2",
-            min_seq_len=1024,
-            max_seq_len=2048,
+            # min_seq_len=1024,
+            # max_seq_len=2048,
+            min_seq_len=128,
+            max_seq_len=128,
             seq_len_step="power-of-2",
             dtype=torch.float16,
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
@@ -202,10 +204,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        # offline_profiler.profile(opcode="all_reduce")
-        offline_profiler.profile(opcode="p2p")
+        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="p2p")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -229,11 +231,11 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         global_bs = 64
-        seq_len = 1024
+        seq_len = 128
         num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         data_dtype = torch.long
         dtype = torch.float16
         device = "cpu"
@@ -242,8 +244,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_nodes = 1
         global_configs.num_devices_per_node = 2
 
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -535,11 +537,11 @@ class TorchModelProfileTest(unittest.TestCase):
 
         model_type = ModelType.GPT
         global_bs = 64
-        seq_len = 1024
+        seq_len = 128
         num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
@@ -547,8 +549,8 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         # Get number of microbatches

@@ -762,7 +762,6 @@ class CriusOfflineDataManager:
             torch.cuda.synchronize()
             __sync_barrier()
 
-
             if opcode != "p2p":
                 op_latency = self._benchmark_one_op(
                     opcode=opcode, op_func=op_func, shapes=[(tensor_size, ), ], num_warmup_steps=num_warmup_steps, 
