@@ -223,7 +223,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -307,7 +307,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 # "after_nodes": ['fc2', ],
                 # "after_nodes": ['matmul', ],
                 "after_markers": ['self_attention_linear_proj_weight', 'mlp_linear_fc2_weight', ],
-                "after_nodes": ['contiguous', ],
+                "after_nodes": ['autograd_apply', ],
                 "interval": 1,
                 "pass": 'forward',
                 "parallelism": 'tp',
@@ -521,7 +521,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 

@@ -381,11 +381,15 @@ def _insert_comm_primitives_into_graph_impl(
                         setattr(node.next, "node_parallelism", node_parallelism)
                         continue
                     
-                    # TODO(chunyu): When manually inserting communication nodes, we may:
-                    # 1. Construct a communication node;
-                    # 2. Determine its input shape based on its prev node's output shape;
-                    # 3. Maybe need to change shapes of next nodes (e.g., when comm primitive is all-gather);
-                    raise NotImplementedError("Implement customized communication node insertion here.")
+                    # Insert a communication node
+                    with graph.inserting_after(node):
+                        comm_node = graph.call_function(global_configs.comm_op_funcs[comm_primitive], args=(node, ))
+                        setattr(comm_node, "layer_type", comm_primitive)
+                        input_shapes, output_shapes = _infer_comm_node_input_output_shapes(node, comm_primitive, node_pass, node_parallelism)
+                        setattr(comm_node, "input_shapes", input_shapes)
+                        setattr(comm_node, "output_shapes", output_shapes)
+                        setattr(comm_node, "node_pass", node_pass)
+                        setattr(comm_node, "node_parallelism", node_parallelism)
         
         else:
             # Backward pass
@@ -409,9 +413,6 @@ def _insert_comm_primitives_into_graph_impl(
                         n_ranks <= 1
                     ):
                         continue
-                    
-                    # assert comm_primitive not in str(node.next.target), \
-                        # "In manually constructed backward graph, no communication operator should be included at first."
                     
                     # Insert a communication node
                     with graph.inserting_after(node):
@@ -437,7 +438,11 @@ def _infer_comm_node_input_output_shapes(
     n_ranks * input_shapes.
     """
 
-    if primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "dp":
+    if primitive_type == "all_reduce" and node_pass == "forward" and node_parallelism == "tp":
+        # All-reduce the activation of previous node
+        assert len(prev_node.output_shapes) == 1 and len(prev_node.output_shapes[0]) == 3     # [[s, b, h1]]
+        input_shapes = output_shapes = [prev_node.output_shapes]
+    elif primitive_type == "all_reduce" and node_pass == "backward" and node_parallelism == "dp":
         # All-reduce the weight gradients (output) of previous node
         assert len(prev_node.output_shapes[0]) == 2     # [s*b, h2] x [h2, h1]
         input_shapes = output_shapes = [prev_node.output_shapes[0]]
