@@ -167,43 +167,43 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
             gemm_left_op_hidden_dims=[      # Only consider forward ops
-                2048, 4096, 8192, 16384, 
+                1024, 2048, 4096, 8192, 16384, 
             ],
             gemm_right_op_hidden_dims=[
-                2048, 4096, 6144, 12288, 8192, 16384, 25000, 50000, 
+                1024, 2048, 4096, 3072, 6144, 12288, 8192, 16384, 12500, 25000, 50000, 
             ],
             bmm_op_hidden_dims=[
-                2048, 4096, 8192,
+                1024, 2048, 4096, 8192,
             ],
             baddbmm_op_hidden_dims=[
-                2048, 4096, 8192,
+                1024, 2048, 4096, 8192,
             ],
             num_attn_heads_per_rank=[
-                16, 32,
+                8, 16, 32,
             ],
             layernorm_op_hidden_dims=[
-                2048, 4096, 8192,
+                1024, 2048, 4096, 8192,
             ],
             dropout_op_hidden_dims=[
-                2048, 4096, 8192,
+                1024, 2048, 4096, 8192,
             ],
             dropout_op_num_attn_heads=[
-                16, 32,
+                8, 16, 32,
             ],
             masked_fill_op_num_attn_heads=[
-                16, 32,
+                8, 16, 32,
             ],
             softmax_op_num_attn_heads=[
-                16, 32,
+                8, 16, 32,
             ],
             comm_data_sizes = [2**i for i in range(1,31)] + [
                 # Special volumes
-                204800000, 409600000, 50331648, 100663296,
+                102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
             ],
         )
         offline_profiler = CriusOfflineDataManager(
@@ -220,8 +220,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        # offline_profiler.profile(opcode="all_reduce")
-        offline_profiler.profile(opcode="p2p")
+        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="p2p")
 
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -246,9 +246,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
@@ -258,10 +258,10 @@ class TorchModelProfileTest(unittest.TestCase):
         vocab_size = 50000
         
         global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 2
+        global_configs.num_devices_per_node = 4
 
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -283,7 +283,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_boundary_end_marker = ['dropout', 'add', ]
         # pipeline_boundary_start_marker = ['input_layernorm', ]
         pipeline_boundary_end_marker = ['final_layernorm', ]
-        pipeline_forced_p2p_comm_overhead_ms = 20.0
+        pipeline_forced_p2p_comm_overhead_ms = 10.0
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -554,20 +554,20 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 16
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 2
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 

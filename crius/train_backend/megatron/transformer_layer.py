@@ -124,6 +124,8 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         # Residual connection.
         residual = hidden_states
 
+        # TODO(chunyu): Add custom backward function for TP all-reduce in backward pass.
+
         # Optional Input Layer norm
         input_layernorm_output = self.input_layernorm(hidden_states)
 

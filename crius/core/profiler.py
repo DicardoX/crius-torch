@@ -298,6 +298,15 @@ class CriusDistProfiler:
             logger.warning("No backward graph generation, use '2x forward stage latency' to estimate backward stage latency.")
             for i in range(parallelism_plan.pipeline_parallel_degree):
                 stage_latencies[i][1] = stage_latencies[i][0] * 2.0
+
+            # # Special cases
+            # if parallelism_plan.tensor_parallel_degree > 1:
+            #     # Remove all-reduce latencies in backward pass, because 
+            #     for node in graph.nodes:
+            #         if node.node_parallelism == "tp" and node.layer_type == "all_reduce":
+            #             print(node.target, node.latency)
+            #             stage_latencies[node.stage_index][1] -= node.latency * 2.0
+
         else:
             assert bw_graph is not None
             for node in bw_graph.nodes:
