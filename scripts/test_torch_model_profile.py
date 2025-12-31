@@ -167,7 +167,7 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
@@ -223,7 +223,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -247,11 +247,11 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
         global_bs = 64
-        seq_len = 1024
+        seq_len = 512
         num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         data_dtype = torch.long
         dtype = torch.float16
         device = "cpu"
@@ -521,7 +521,7 @@ class TorchModelProfileTest(unittest.TestCase):
         
         print(f"========> Measured end-to-end latency: {measured_e2e_latency:.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_v2(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -555,11 +555,11 @@ class TorchModelProfileTest(unittest.TestCase):
 
         model_type = ModelType.GPT
         global_bs = 64
-        seq_len = 1024
+        seq_len = 512
         num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
@@ -667,7 +667,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
         )
         trainer.train()
 

@@ -784,7 +784,7 @@ class CriusOfflineDataManager:
             if rank == 0:
                 logger.info(
                     f"==========> {opcode} profile: num_nodes: {num_nodes}, group_size: {world_size}, " + \
-                    f"tensor_size: {tensor_size}, latency (ms): {op_latency}"
+                    f"tensor_size: {tensor_size}, latency (ms): {op_latency}, query key: {query_key}"
                 )
                 self.recorder.write_one_entry(query_key, op_latency, None)
         

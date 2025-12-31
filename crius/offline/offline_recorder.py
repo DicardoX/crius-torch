@@ -19,9 +19,9 @@ class OfflineDataRecorder:
 
     def __init__(
         self,
-        to_store_path: str = "./crius/offline/data",
+        to_store_path: str = "./crius/offline",
         data_filename: str = "prof_data.pkl",
-        force_overwrite: bool = True
+        force_overwrite: bool = True,
     ):
         """ Initialize a OfflineDataRecorder object. """
 
@@ -29,6 +29,7 @@ class OfflineDataRecorder:
         self.filename = data_filename
         self._path = os.path.join(self.to_store_path, self.filename)
         self.force_overwrite = force_overwrite
+        
         if not os.path.exists(to_store_path):
             os.makedirs(os.path.dirname(to_store_path), exist_ok=True)
             logger.warning(f"Created directory for profiling data:{os.path.dirname(to_store_path)}")
@@ -115,50 +116,3 @@ class OfflineDataRecorder:
             return f"{op_type}_n{num_comm_nodes}_gs{comm_group_size}_d{comm_data_size}"
         else:
             return None
-    
-    @overload
-    def _check_cache(
-        self, 
-        query_key: str, 
-        op_type: str, 
-        batch_size: int, 
-        seq_len: int, 
-        left_hidden_dim: int, 
-        right_hidden_dim: int,
-        layout: str
-    ) -> None: ...
-
-    @overload
-    def _check_cache(
-        self, 
-        query_key: str, 
-        op_type: str, 
-        comm_node_num: int,
-        group_size: int, 
-        data_size: int
-    ) -> None: ...    
-
-    def _check_cache(self, query_key, op_type, *args, **kwargs) -> None: 
-        """ Check whether query_key is in '*.pkl' file. """
-        if len(args) == 5:   
-
-            batch_size, seq_len, left_hidden_dim, right_hidden_dim, layout = args  
-
-            if query_key in self.data and not self.force_overwrite:
-                logger.info(f"Cached {op_type} profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
-                return
-                
-            logger.info(f"=========> {op_type} profile: batch_size: {batch_size}, seq_len: {seq_len}, " + 
-                                        f"left_hd: {left_hidden_dim}, right_hd: {right_hidden_dim}, layout: {layout}")
-                 
-        elif len(args) == 3:       
-
-            comm_node_num, group_size, data_size = args
-            
-            if query_key in self.data and not self.force_overwrite:
-
-                logger.info(f"Cached {op_type} profile: comm_node_num: {comm_node_num}, group_size: {group_size}, data_size: {data_size}")
-                return
-                
-            logger.info(f"=========> {op_type} profile: comm_node_num: {comm_node_num}, group_size: {group_size}, data_size: {data_size}")

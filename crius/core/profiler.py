@@ -215,7 +215,7 @@ class CriusDistProfiler:
                         elif query_key is not None:
                             raise ValueError(f"Query key {query_key} not found in profiled data.")
                             logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
-                    
+
                     setattr(node, "latency", node_latency)
                 else:
                     # Non dominant nodes
@@ -233,15 +233,15 @@ class CriusDistProfiler:
                     "gemm", "bmm", "baddbmm", "layernorm", "dropout", "masked_fill_", "softmax", "all_reduce",
                 ):
                     accumulated_latency += node.latency
-                    print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
+                    logger.info(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
 
-            print("\n\n\n\n\n")
+            logger.info("\n\n\n\n\n")
             
             accumulated_latency = 0.0
             for node in bw_graph.nodes:
                 if node.layer_type in ("gemm", "bmm", "baddbmm", "all_reduce"):
                     accumulated_latency += node.latency
-                    print(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
+                    logger.info(node.layer_type, node.input_shapes, node.layout, node.latency, accumulated_latency)
             exit(0)
 
         return graph, bw_graph
@@ -299,13 +299,13 @@ class CriusDistProfiler:
             for i in range(parallelism_plan.pipeline_parallel_degree):
                 stage_latencies[i][1] = stage_latencies[i][0] * 2.0
 
-            # # Special cases
-            # if parallelism_plan.tensor_parallel_degree > 1:
-            #     # Remove all-reduce latencies in backward pass, because 
-            #     for node in graph.nodes:
-            #         if node.node_parallelism == "tp" and node.layer_type == "all_reduce":
-            #             print(node.target, node.latency)
-            #             stage_latencies[node.stage_index][1] -= node.latency * 2.0
+            # Special cases
+            if parallelism_plan.tensor_parallel_degree > 1:
+                # Remove additional all-reduce latencies in backward pass, because each all-reduce in forward
+                # only corresponds to a single all-reduce in backward, not two.
+                for node in graph.nodes:
+                    if node.node_parallelism == "tp" and node.layer_type == "all_reduce":
+                        stage_latencies[node.stage_index][1] -= node.latency
 
         else:
             assert bw_graph is not None
