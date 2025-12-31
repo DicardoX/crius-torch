@@ -246,9 +246,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 64
-        seq_len = 512
-        num_micro_batches = 16
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -554,9 +554,9 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 64
-        seq_len = 512
-        num_micro_batches = 16
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
