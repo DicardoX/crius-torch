@@ -48,6 +48,10 @@ class ParallelismPlan:
     assuming 16 microbatches and DP=2, each DP replica executes 8 microbatches and the total number of microbatches
     for the per-DP pipeline becomes 8. """
 
+    use_global_grad_sync_dp_backward: bool = True
+    """ When DP degree < #GPUs (i.e., in hybrid parallelism), performing gradient synchronization across all GPUs, 
+    rather than only across DP replicas. """
+
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
     Detailed in `class CriusParallelPlanner`."""

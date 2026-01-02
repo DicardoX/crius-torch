@@ -267,10 +267,17 @@ class CriusDistProfiler:
             num_comm_nodes = int(np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node))
             return (parallelism_plan.tensor_parallel_degree, num_comm_nodes)
         elif parallelism == "dp":
-            num_dp_ranks_per_node = int(np.ceil(global_configs.num_devices_per_node / (
-                parallelism_plan.pipeline_parallel_degree * parallelism_plan.tensor_parallel_degree)
-            ))
-            num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
+            if parallelism_plan.use_global_grad_sync_dp_backward:
+                # Perform gradient synchronization across all GPUs, even in hybrid parallelism
+                group_size = global_configs.num_devices_per_node * global_configs.num_nodes
+                num_comm_nodes = global_configs.num_nodes
+                return (group_size, num_comm_nodes)
+            else:
+                # Only across DP replicas
+                num_dp_ranks_per_node = int(np.ceil(global_configs.num_devices_per_node / (
+                    parallelism_plan.pipeline_parallel_degree * parallelism_plan.tensor_parallel_degree)
+                ))
+                num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
             return (parallelism_plan.data_parallel_degree, num_comm_nodes)
         elif parallelism == "pp":
             return (2, 1)   # P2P communication, FIXME(chunyu): Currently assumed as 1 node
@@ -343,28 +350,34 @@ class CriusDistProfiler:
         ):
             return []    # No gradient synchronization needed
 
+        # FIXME(chunyu): Seems that the grad sync communication size is not totally matched with the ground truth.
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "dp")
         nbytes_per_numel = dtype_to_bytes[params_dtype]
+        grad_sync_comm_sizes = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for node in graph.nodes:
             if node.layer_type == "gemm":
                 # Estimate the weight gradient size of this gemm node
                 assert len(node.input_shapes) == 2, "Invalid gemm input shapes."
+                assert len(node.input_shapes[1]) == 2, f"Invalid gemm weight shape: {node.input_shapes[1]}."
                 weight_numel = np.prod(node.input_shapes[1])
                 comm_data_size = weight_numel * nbytes_per_numel
-                query_key = OfflineDataRecorder.get_query_key(
-                    "all_reduce", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
-                )
-                node_grad_sync_latency = 0.0
-                if self._profiled_data is not None and query_key in self._profiled_data:
-                    node_grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
-                else:
-                    raise ValueError(f"Grad sync query key {query_key} not found " + 
-                                     f"in profiled data for grad sync estimation.")
-                    logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
-                                   f"using default latency {node_grad_sync_latency}ms.")
-                                   
-                grad_sync_latencies[node.stage_index] += node_grad_sync_latency
+                grad_sync_comm_sizes[node.stage_index] += int(comm_data_size)
+
+        for i in range(parallelism_plan.pipeline_parallel_degree):
+            comm_data_size = grad_sync_comm_sizes[i]
+            query_key = OfflineDataRecorder.get_query_key(
+                "all_reduce", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
+            )
+            node_grad_sync_latency = 0.0
+            if self._profiled_data is not None and query_key in self._profiled_data:
+                node_grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
+            else:
+                raise ValueError(f"Grad sync query key {query_key} not found " + 
+                                    f"in profiled data for grad sync estimation.")
+                logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
+                                f"using default latency {node_grad_sync_latency}ms.")
+            grad_sync_latencies[i] = node_grad_sync_latency
 
         return grad_sync_latencies
 
