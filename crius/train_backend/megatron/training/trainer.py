@@ -42,6 +42,7 @@ class ModelType(enum.Enum):
 
     GPT = enum.auto()
     LLAMA = enum.auto()
+    MoE = enum.auto()
 
 
 class Trainer:
