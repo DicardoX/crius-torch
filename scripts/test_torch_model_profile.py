@@ -213,16 +213,16 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        # offline_profiler.profile(opcode="gemm")
-        # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
-        # offline_profiler.profile(opcode="layernorm")
-        # offline_profiler.profile(opcode="dropout")
-        # offline_profiler.profile(opcode="masked_fill_")
-        # offline_profiler.profile(opcode="softmax")
+        offline_profiler.profile(opcode="gemm")
+        offline_profiler.profile(opcode="bmm")
+        offline_profiler.profile(opcode="baddbmm")
+        offline_profiler.profile(opcode="layernorm")
+        offline_profiler.profile(opcode="dropout")
+        offline_profiler.profile(opcode="masked_fill_")
+        offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
-        offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):

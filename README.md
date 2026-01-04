@@ -8,7 +8,7 @@ To build Docker images and run container:
 # Build image
 docker build -t dicardo/crius-torch:0.0-dev .
 # Run container
-docker run --runtime=nvidia -it --rm --gpus all --shm-size 64g --network=host --privileged --volume /home/cyxue/Projects/crius-torch/.cache:/root/.cache --env NVIDIA_DISABLE_REQUIRE=1 --name crius-torch-dev dicardo/crius-torch:0.0-dev
+docker run --runtime=nvidia -d -it --rm --gpus all --shm-size 64g --network=host --privileged --volume /home/cyxue/Projects/crius-torch/.cache:/root/.cache --env NVIDIA_DISABLE_REQUIRE=1 --name crius-torch-dev dicardo/crius-torch:0.0-dev
 ```
 
 To install the editable alpha version of crius from source:

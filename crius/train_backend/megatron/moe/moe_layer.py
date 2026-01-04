@@ -9,6 +9,9 @@ from typing import Optional, Union
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 
+from crius.train_backend.megatron.moe.router import TopKRouter
+from crius.train_backend.megatron.moe.experts import SequentialMLP
+
 __all__ = [ "MoELayer", ]
 
 
@@ -33,10 +36,10 @@ class MoELayer(MegatronModule):
         assert self.config.num_moe_experts % ep_size == 0
         self.num_local_experts = self.config.num_moe_experts // ep_size
 
-        self.router = None  # TODO(chunyu): Implement router initialization here.
+        self.router = TopKRouter(self.config)
 
         assert config.moe_token_dispather_type == "allgather", \
             "Only All-Gather dispatcher is supported currently."
-        self.dispatcher = None  # TODO(chunyu): Implement All-Gather dispatcher here.
+        self.token_dispatcher = None  # TODO(chunyu): Implement All-Gather dispatcher here.
 
-        raise NotImplementedError("MoELayer is not implemented yet.")
+        self.experts = SequentialMLP(self.num_local_experts, self.config)
