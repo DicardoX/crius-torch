@@ -149,13 +149,8 @@ class TopKRouter(MegatronModule):
         assert self.score_function == "softmax", "Only softmax score function is supported currently."
         scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
         probs, top_indices = torch.topk(scores, self.topk, dim=1)
-        
         probs = torch.zeros_like(logits).scatter(1, top_indices, probs)
         routing_map = torch.zeros_like(logits).int().scatter(1, top_indices, 1).bool()
-        
-        print(routing_map)
-        exit(0)
-        
         return probs, routing_map
 
     def forward(self, input: torch.Tensor):

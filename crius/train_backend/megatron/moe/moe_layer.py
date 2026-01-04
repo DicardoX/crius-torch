@@ -92,7 +92,7 @@ class MoELayer(MegatronModule):
         
         # Reverses token permutation to restore original ordering before reduction operations
         unpermuted_local_hidden = unpermute(
-            hidden_states,
+            expert_output,
             self.reversed_local_input_permutation_mapping,
             restore_shape=self.hidden_shape_before_permute,
             routing_map=self.local_map,
@@ -149,9 +149,6 @@ def permute(
         torch.arange(num_tokens, device=routing_map.device).unsqueeze(0).expand(num_experts, -1)
     )
     sorted_indices = token_indices.masked_select(routing_map)
-
-    print(token_indices.shape, routing_map.shape, sorted_indices.shape)
-    exit(0)
 
     if probs is not None:
         permuted_probs = probs.T.contiguous().masked_select(routing_map)
