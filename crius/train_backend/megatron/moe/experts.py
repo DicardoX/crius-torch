@@ -7,7 +7,6 @@
 from copy import deepcopy
 
 import torch
-
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 

@@ -6,10 +6,12 @@
 
 from typing import Optional, Union
 
+import torch
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 
 from crius.train_backend.megatron.moe.router import TopKRouter
+from crius.train_backend.megatron.moe.token_dispatcher import MoEAllGatherTokenDispatcher
 from crius.train_backend.megatron.moe.experts import SequentialMLP
 
 __all__ = [ "MoELayer", ]
@@ -21,6 +23,8 @@ class MoELayer(MegatronModule):
     This layer implements a Mixture of Experts model, where each token is routed to a
     subset of experts. This implementation supports different token dispatching
     strategies such as All-to-All and All-Gather.
+
+    TODO(chunyu): To support expert parallelism, we should implement token dispatcher.
     """
 
     def __init__(
@@ -38,8 +42,27 @@ class MoELayer(MegatronModule):
 
         self.router = TopKRouter(self.config)
 
-        assert config.moe_token_dispather_type == "allgather", \
-            "Only All-Gather dispatcher is supported currently."
-        self.token_dispatcher = None  # TODO(chunyu): Implement All-Gather dispatcher here.
+        # assert config.moe_token_dispather_type == "allgather", \
+        #     "Only All-Gather dispatcher is supported currently."
+        # self.token_dispatcher = MoEAllGatherTokenDispatcher(
+        #     self.num_local_experts, self.local_expert_indices, self.config,
+        # )
 
         self.experts = SequentialMLP(self.num_local_experts, self.config)
+
+    def forward(self, hidden_states: torch.Tensor):
+        """Forward pass for the MoE layer.
+
+        The forward pass comprises four main steps:
+        1. Routing & Preprocessing: Route tokens to the assigned experts and prepare for dispatch.
+        2. Dispatch: Tokens are sent to the expert devices using communication collectives.
+        3. Expert Computation: Experts process the dispatched tokens.
+        4. Combine: The outputs from the experts are combined and returned.
+
+        Args:
+            hidden_states (torch.Tensor): The input tensor to the MoE layer.
+
+        Returns:
+            A tuple containing the output tensor and the MLP bias, if any.
+        """
+        raise NotImplementedError("MoE Layer is not implemented yet.")
