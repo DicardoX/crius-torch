@@ -149,7 +149,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -221,8 +221,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        offline_profiler.profile(opcode="all_reduce")
-        # offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -554,7 +554,7 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         trainer.train()
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_moe(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 

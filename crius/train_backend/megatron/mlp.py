@@ -41,12 +41,15 @@ class MLP(MegatronModule):
         config: TransformerConfig, 
         input_size: Optional[int] = None,
         ffn_hidden_size: int = None,
+        is_expert: bool = False,
     ) -> None:
         super().__init__(config=config)
 
-        self.config: TransformerConfig = config
+        self.config = config
         self.input_size = input_size if input_size != None else self.config.hidden_size
         if ffn_hidden_size is None:
+            if is_expert:
+                raise ValueError("MoE MLP requires `ffn_hidden_size`, but it was not provided.")
             warnings.warn(
                 "MLP requires ffn_hidden_size, but it was not provided. Using \
                     config.ffn_hidden_size by default.",
@@ -69,6 +72,7 @@ class MLP(MegatronModule):
             device=global_configs.current_device,
             dtype=self.config.params_dtype,
             skip_bias_add=True,
+            is_expert=is_expert,
         )
 
         self.activation_func = self.config.activation_func
@@ -83,8 +87,8 @@ class MLP(MegatronModule):
             dtype=self.config.params_dtype,
             input_is_parallel=True,
             skip_bias_add=True,
+            is_expert=is_expert,
         )
-
 
     def forward(self, hidden_states, per_token_scale=None):
         """ Forward method for compilation. """

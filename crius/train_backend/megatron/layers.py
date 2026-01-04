@@ -81,7 +81,7 @@ class ColumnParallelLinear(torch.nn.Module):
 
     def __init__(
         self, input_size, output_size, tp_size, bias, device, dtype, skip_bias_add=False, 
-        sequence_parallel=False, disable_grad_reduce=False, **kwargs,
+        is_expert=False, sequence_parallel=False, disable_grad_reduce=False, **kwargs,
     ):
         super(ColumnParallelLinear, self).__init__()
 
@@ -93,6 +93,7 @@ class ColumnParallelLinear(torch.nn.Module):
         self.device = device
         self.dtype = dtype
         self.skip_bias_add = skip_bias_add
+        self.is_expert = is_expert
 
         self.weight = Parameter(
             torch.empty(
@@ -164,7 +165,7 @@ class RowParallelLinear(torch.nn.Module):
 
     def __init__(
         self, input_size, output_size, tp_size, bias, device, dtype, input_is_parallel=False, 
-        skip_bias_add=False, sequence_parallel=False, **kwargs
+        skip_bias_add=False, is_expert=False, sequence_parallel=False, **kwargs
     ):
         super(RowParallelLinear, self).__init__()
 
@@ -177,6 +178,7 @@ class RowParallelLinear(torch.nn.Module):
         self.dtype = dtype
         self.input_is_parallel = input_is_parallel
         self.skip_bias_add = skip_bias_add
+        self.is_expert = is_expert
 
         self.weight = Parameter(
             torch.empty(
@@ -200,7 +202,6 @@ class RowParallelLinear(torch.nn.Module):
 
         self.sequence_parallel = sequence_parallel
         self.explicit_expert_comm = False
-
     
     def forward(self, input_: torch.Tensor):
         """ Forward of RowParallelLinear. """
