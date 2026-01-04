@@ -18,6 +18,7 @@ from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 
 from crius.train_backend.megatron.attention import SelfAttention
 from crius.train_backend.megatron.mlp import MLP
+from crius.train_backend.megatron.moe.moe_layer import MoELayer
 from crius.global_envs import global_configs
 
 __all__ = [ "TransformerLayer", ]
@@ -68,11 +69,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
         )
 
         # [Module 8: MLP block]
-        self.mlp = MLP(config)
+        self.mlp = MLP(config) if config.num_moe_experts is None else MoELayer(config, layer_number)
 
         # [Module 9: BiasDropoutFusion]
         self.mlp_bda = get_bias_dropout_add
 
+        self.is_moe_layer = isinstance(self.mlp, MoELayer)
+        
         self.bias_dropout_add_exec_handler = torch.enable_grad
 
     def forward(self, *args, **kwargs):

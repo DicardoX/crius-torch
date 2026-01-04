@@ -149,7 +149,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -554,7 +554,7 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         trainer.train()
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_moe(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -592,20 +592,131 @@ class TorchModelProfileTest(unittest.TestCase):
         num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 4
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
-        moe_model = model_provider(hidden_size, num_layers, seq_len, vocab_size, device, dtype)
-        raise NotImplementedError("Implement MoE-related model codes.")
+        # Get number of microbatches
+        # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
+        # only changing the number of micro-batches to maintain constant global batch size.
+        micro_batch_size =  global_bs // num_micro_batches
+        assert global_bs % (micro_batch_size * global_configs.data_parallel_size) == 0, \
+            f"Global batch size {global_bs} must be divisible by micro-batch-size {micro_batch_size} " + \
+            f"x data parallel size {global_configs.data_parallel_size}."
+        num_micro_batches = global_bs // (micro_batch_size * global_configs.data_parallel_size)
+        global_bs = micro_batch_size * num_micro_batches    # of this DP rank
+
+        # Init distributed
+        initialize_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        )
+        model_parallel_cuda_manual_seed(1234)
+
+        # Create TransformerConfig for Megatron
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
+            fp16=(dtype == torch.float16),
+            # MoE
+            num_moe_experts=2,
+            moe_router_topk=2,
+        )
+        # NOTE: Monkey patch all input configuratons into `megatron_config`, 
+        # instead of explicitly pass-in into the arguments of `Trainer()`.
+        setattr(megatron_config, "global_batch_size", global_bs)
+        setattr(megatron_config, "num_micro_batches", num_micro_batches)
+        setattr(megatron_config, "sequence_length", seq_len)
+        setattr(megatron_config, "num_iters", num_iters)
+        setattr(megatron_config, "dtype", dtype)
+        # Monkey patch MoE specific configs due to lower Megatron version
+        setattr(megatron_config, "moe_router_dtype", dtype)
+        setattr(megatron_config, "moe_ffn_hidden_size", megatron_config.ffn_hidden_size)
+        setattr(megatron_config, "moe_router_score_function", "softmax")
+        setattr(megatron_config, "moe_router_enable_expert_bias", False)
+        setattr(megatron_config, "moe_router_force_load_balancing", False)
+        setattr(megatron_config, "moe_permute_fusion", False)
+        setattr(megatron_config, "moe_apply_probs_on_input", False)
+        setattr(megatron_config, "fp4", None)
+        setattr(megatron_config, "fp8", None)
+
+        # Model
+        model_kwargs={
+            "hidden_size": hidden_size,
+            "num_layers": num_layers,
+            "max_seq_len": seq_len,
+            "vocab_size": vocab_size,
+            "device": device,
+            "dtype": dtype,
+            "megatron_config": megatron_config,
+        }
+        model = model_provider(**model_kwargs) if model_provider else None
+        model = setup_model(model)
+        
+        train_data_iterator = get_train_data_iterator(
+            vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
+        )
+        (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler(
+            model, global_bs, num_iters, fp16=(dtype == torch.float16), params_dtype=dtype, 
+        )
+
+        # Definition of forward step function
+        def __forward_step_func(data_iterator, model):
+            """ Vanilla forward step function. """
+   
+            def __loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
+                """ Loss function definition. """
+                losses = output_tensor.float()
+                loss_mask = loss_mask.view(-1).float()
+                loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+                # If you have data parallel reduce loss across data parallel groups.
+                # If pipeline parallel, loss computation is done only in last stage.
+                return loss, {"lm loss": loss}
+
+            megatron_config = get_attr_wrapped_model(model, attr="config")
+            # Input batch
+            (tokens, labels, loss_mask, 
+             attention_mask, position_ids) = get_input_batch(
+                 data_iterator=data_iterator,
+                 micro_batch_size=(
+                     megatron_config.global_batch_size // megatron_config.num_micro_batches
+                 ),
+                 seq_len=megatron_config.sequence_length,
+                 pipeline_model_parallel_size=megatron_config.pipeline_model_parallel_size,
+            )
+            # Forward
+            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+
+            return output_tensor,  partial(__loss_func, loss_mask)
+
+        # Trainer
+        trainer = Trainer(
+            megatron_transformer_config=megatron_config,
+            forward_step_func=__forward_step_func,
+            model=model,
+            model_type=model_type,
+            train_data_iterator=train_data_iterator,
+            optimizer=optimizer,
+            opt_param_scheduler=opt_param_scheduler,
+            pipeline_strategy="1f1b",
+            forward_only=False,
+            use_pytorch_profiler=False,
+        )
+        trainer.train()
+
 
     # ===================> Deprecated tests
     @unittest.skip("Deprecated.")

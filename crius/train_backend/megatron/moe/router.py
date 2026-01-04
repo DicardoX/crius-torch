@@ -152,6 +152,10 @@ class TopKRouter(MegatronModule):
         
         probs = torch.zeros_like(logits).scatter(1, top_indices, probs)
         routing_map = torch.zeros_like(logits).int().scatter(1, top_indices, 1).bool()
+        
+        print(routing_map)
+        exit(0)
+        
         return probs, routing_map
 
     def forward(self, input: torch.Tensor):
