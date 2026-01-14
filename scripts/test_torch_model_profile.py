@@ -404,9 +404,11 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
+
+        # TODO(chunyu): Debugging multi-node execution.
 
         # import os
         # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -554,7 +556,7 @@ class TorchModelProfileTest(unittest.TestCase):
         )
         trainer.train()
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_moe(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 

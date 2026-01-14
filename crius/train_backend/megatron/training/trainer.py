@@ -159,7 +159,7 @@ class Trainer:
                 self.megatron_config.global_batch_size * 
                 parallel_state.get_data_parallel_world_size()
             )
-            self.lr_scheduler.step(increment=increment)
+            self.opt_param_scheduler.step(increment=increment)
         
         torch.cuda.synchronize()
         return (tr_loss, ) if last_stage else (None, )
