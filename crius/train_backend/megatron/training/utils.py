@@ -120,6 +120,8 @@ def get_train_data_iterator(
             parallel_state.is_pipeline_first_stage(ignore_virtual=True) or 
             parallel_state.is_pipeline_last_stage(ignore_virtual=True)
         ) and parallel_state.get_tensor_model_parallel_rank() == 0
+    
+    print(f"\n\nRanks: {parallel_state.get_all_ranks()} building dataset: {__is_dataset_built_on_rank()}\n\n")
 
     (train_dataset, _, _) = BlendedMegatronDatasetBuilder(
         cls=MockGPTDataset, sizes=[num_iters * global_batch_size, 0, 0],
@@ -127,12 +129,17 @@ def get_train_data_iterator(
         config=dataset_config,
     ).build()
 
+    exit(0)
+
     # Dataloader
     train_dataloader = DataLoader(
         dataset=train_dataset, 
         batch_size=(global_batch_size // num_micro_batches),
         shuffle=False,
     )
+
+    exit(0)
+
     return iter(train_dataloader)
 
 

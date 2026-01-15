@@ -68,6 +68,11 @@ class TorchModelProfileTest(unittest.TestCase):
     """ Basic torch model disaggregated profiling test cases.
     
     This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
+    
+    When used in multi-node execution, use: 
+        `torchrun --nnodes X --nproc-per-node N --node_rank R --master_addr "MASTER_IP" --master_port PORT script.py`
+    
+    NOTE: In docker container, the used ssh port cannot be the same as the host (i.e., 22), must be changed to another port.
     """
 
     @unittest.skip("Pass.")
@@ -408,8 +413,6 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
-        # TODO(chunyu): Debugging multi-node execution.
-
         # import os
         # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
@@ -451,7 +454,7 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
         global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
