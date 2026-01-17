@@ -76,14 +76,15 @@ def initialize_distributed(
 
     torchrun_world_size = int(os.environ['WORLD_SIZE'])
     num_available_gpus = torch.cuda.device_count()
-    if torchrun_world_size != num_available_gpus:
-        logger.warning(f"=========> The number of GPUs available ({num_available_gpus}) does not match the WORLD_SIZE ({torchrun_world_size}).")
+    # if torchrun_world_size != num_available_gpus:
+    #     logger.warning(f"=========> The number of GPUs available ({num_available_gpus}) does not match the WORLD_SIZE ({torchrun_world_size}).")
 
     # Torch setup for distributed training
     local_rank = int(os.environ['LOCAL_RANK'])
+    device_id = torch.device(f'cuda:{local_rank}')
     global_rank = int(os.environ['RANK'])
     torch.cuda.set_device(local_rank)
-    torch.distributed.init_process_group(world_size=torchrun_world_size, rank=global_rank)
+    torch.distributed.init_process_group(world_size=torchrun_world_size, rank=global_rank, backend="nccl")
 
     # Megatron core distributed training initialization
     parallel_state.initialize_model_parallel(tensor_model_parallel_size, pipeline_model_parallel_size)    

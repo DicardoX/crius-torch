@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import logging
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.module import Float16Module
@@ -88,17 +88,55 @@ def setup_model(model: MegatronModule, wrap_with_ddp: bool = True) -> List[Megat
     return model
 
 
+class MockDataset(Dataset):
+    def __init__(self, size, seq_len=1024, vocab_size=50304):
+        self.size = size
+        self.seq_len = seq_len
+        self.vocab_size = vocab_size
+        
+    def __len__(self):
+        return self.size
+        
+    def __getitem__(self, idx):
+        tokens = torch.randint(0, self.vocab_size, (self.seq_len,), dtype=torch.long)
+        return {
+            'tokens': tokens,
+            'attention_mask': torch.ones(self.seq_len, dtype=torch.bool),
+            'position_ids': torch.arange(self.seq_len, dtype=torch.long),
+            'loss_mask': torch.ones(self.seq_len, dtype=torch.float32),
+            'labels': tokens.clone()
+        }
+
+
 def get_train_data_iterator(
     vocab_size: int, global_batch_size, num_micro_batches, sequence_length: int, 
     random_seed: int = 123, path_to_cache: str = None, num_iters: int = 10,
 ) -> Iterator:
     """ Get training data iterator. """
+
+    if int(os.environ.get("WORLD_SIZE", -1)) // torch.cuda.device_count():
+        # Multi-model, use self-implemented mock dataset
+        os.environ["USE_NAIVE_MOCK_DATASET_MULTI_NODE"] = "True"
+        train_dataset = MockDataset(10000, sequence_length, vocab_size)
+        # Dataloader
+        train_dataloader = DataLoader(
+            dataset=train_dataset, 
+            batch_size=(global_batch_size // num_micro_batches),
+            shuffle=False,
+        )
+        return iter(train_dataloader)
+
+    # Dataset split
+    num_train_valid_test_samples = [num_iters * global_batch_size,num_iters * global_batch_size, num_iters * global_batch_size]
+    split_weights = [str(_w) for _w in num_train_valid_test_samples]
+    dataset_split = ",".join(split_weights)
     
     # Dataset
     dc_kwargs = {
         "tokenizer": build_tokenizer(),
         "sequence_length": sequence_length,
-        "split": None,
+        "blend": None,
+        "split": dataset_split,
         "random_seed": random_seed,
         "reset_position_ids": False,
         "reset_attention_mask": False,
@@ -120,16 +158,12 @@ def get_train_data_iterator(
             parallel_state.is_pipeline_first_stage(ignore_virtual=True) or 
             parallel_state.is_pipeline_last_stage(ignore_virtual=True)
         ) and parallel_state.get_tensor_model_parallel_rank() == 0
-    
-    print(f"\n\nRanks: {parallel_state.get_all_ranks()} building dataset: {__is_dataset_built_on_rank()}\n\n")
 
     (train_dataset, _, _) = BlendedMegatronDatasetBuilder(
-        cls=MockGPTDataset, sizes=[num_iters * global_batch_size, 0, 0],
+        cls=MockGPTDataset, sizes=num_train_valid_test_samples,
         is_built_on_rank=__is_dataset_built_on_rank,
         config=dataset_config,
     ).build()
-
-    exit(0)
 
     # Dataloader
     train_dataloader = DataLoader(
@@ -137,9 +171,6 @@ def get_train_data_iterator(
         batch_size=(global_batch_size // num_micro_batches),
         shuffle=False,
     )
-
-    exit(0)
-
     return iter(train_dataloader)
 
 
@@ -316,6 +347,33 @@ def get_batch_on_this_tp_rank(
     create_attention_mask_in_dataloader: bool = True,
 ) -> Dict[str, Optional[torch.Tensor]]:
     """ Get the input batch of this tensor parallel rank. """
+
+    if os.environ.get("USE_NAIVE_MOCK_DATASET_MULTI_NODE", "False") == "True":
+        # Construct empty batch
+        tokens = torch.empty(
+            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
+        )
+        labels = torch.empty(
+            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
+        )
+        loss_mask = torch.empty(
+            (micro_batch_size, seq_len), dtype=torch.float32, device=torch.cuda.current_device(),
+        )
+        position_ids = torch.empty(
+            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
+        )
+        attention_mask=torch.empty(
+            (micro_batch_size, 1, seq_len, seq_len), dtype=torch.bool, device=torch.cuda.current_device(),
+        ) if create_attention_mask_in_dataloader else None
+
+        batch = {
+            "tokens": tokens,
+            "labels": labels,
+            "loss_mask": loss_mask,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }
+        return batch
 
     def __broadcast(item):
         """ Broadcast item across tensor parallel group. """
