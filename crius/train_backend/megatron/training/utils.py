@@ -114,18 +114,6 @@ def get_train_data_iterator(
 ) -> Iterator:
     """ Get training data iterator. """
 
-    if int(os.environ.get("WORLD_SIZE", -1)) // torch.cuda.device_count():
-        # Multi-model, use self-implemented mock dataset
-        os.environ["USE_NAIVE_MOCK_DATASET_MULTI_NODE"] = "True"
-        train_dataset = MockDataset(10000, sequence_length, vocab_size)
-        # Dataloader
-        train_dataloader = DataLoader(
-            dataset=train_dataset, 
-            batch_size=(global_batch_size // num_micro_batches),
-            shuffle=False,
-        )
-        return iter(train_dataloader)
-
     # Dataset split
     num_train_valid_test_samples = [num_iters * global_batch_size,num_iters * global_batch_size, num_iters * global_batch_size]
     split_weights = [str(_w) for _w in num_train_valid_test_samples]
@@ -347,33 +335,6 @@ def get_batch_on_this_tp_rank(
     create_attention_mask_in_dataloader: bool = True,
 ) -> Dict[str, Optional[torch.Tensor]]:
     """ Get the input batch of this tensor parallel rank. """
-
-    if os.environ.get("USE_NAIVE_MOCK_DATASET_MULTI_NODE", "False") == "True":
-        # Construct empty batch
-        tokens = torch.empty(
-            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
-        )
-        labels = torch.empty(
-            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
-        )
-        loss_mask = torch.empty(
-            (micro_batch_size, seq_len), dtype=torch.float32, device=torch.cuda.current_device(),
-        )
-        position_ids = torch.empty(
-            (micro_batch_size, seq_len), dtype=torch.int64, device=torch.cuda.current_device(),
-        )
-        attention_mask=torch.empty(
-            (micro_batch_size, 1, seq_len, seq_len), dtype=torch.bool, device=torch.cuda.current_device(),
-        ) if create_attention_mask_in_dataloader else None
-
-        batch = {
-            "tokens": tokens,
-            "labels": labels,
-            "loss_mask": loss_mask,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-        }
-        return batch
 
     def __broadcast(item):
         """ Broadcast item across tensor parallel group. """

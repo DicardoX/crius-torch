@@ -732,10 +732,10 @@ class CriusOfflineDataManager:
         if opcode == "all_reduce":
             op_func = self.configs.allreduce_op_func
         
-        def __setup(world_size: int, rank: int, backend: str = "nccl"):
+        def __setup(world_size: int, rank: int, local_rank: int, backend: str = "nccl"):
             """ Initialize the distributed environment. """
             torch.distributed.init_process_group(world_size=world_size, rank=rank, backend=backend)
-            torch.cuda.set_device(rank)
+            torch.cuda.set_device(local_rank)
         
         def __cleanup():
             """ Clean up the distributed environment. """
@@ -749,9 +749,10 @@ class CriusOfflineDataManager:
         if opcode == "p2p":
             assert world_size == 2, "P2P communication profiling requires exactly 2 processes."
         local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-        rank = int(os.environ["LOCAL_RANK"])
+        rank = int(os.environ["RANK"])
+        local_rank = int(os.environ["LOCAL_RANK"])
         num_nodes = (world_size - 1) // local_world_size + 1
-        __setup(world_size=world_size, rank=rank, backend="nccl")
+        __setup(world_size=world_size, rank=rank, local_rank=local_rank, backend="nccl")
 
         for tensor_size in comm_data_sizes:
             query_key = OfflineDataRecorder.get_query_key(

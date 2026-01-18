@@ -72,7 +72,11 @@ class TorchModelProfileTest(unittest.TestCase):
     When used in multi-node execution, use: 
         `torchrun --nnodes X --nproc-per-node N --node_rank R --master_addr "MASTER_IP" --master_port PORT script.py`
     
-    NOTE: In docker container, the used ssh port cannot be the same as the host (i.e., 22), must be changed to another port.
+    NOTE: In docker container, the used ssh port cannot be the same as the host (i.e., 22), must be changed to 
+          another port.
+    
+          If hang in `torch.distributed.barrier()`, maybe use `export NCCL_P2P_LEVEL=NVL` to disable non-nvlink 
+          GPU P2P access, see https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-p2p-level
     """
 
     @unittest.skip("Pass.")
@@ -84,6 +88,24 @@ class TorchModelProfileTest(unittest.TestCase):
         use_pytorch_profiler = False
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
+
+        torchrun_world_size = int(os.environ['WORLD_SIZE'])
+        # Torch setup for distributed training
+        local_rank = int(os.environ['LOCAL_RANK'])
+        device_id = torch.device(f'cuda:{local_rank}')
+        global_rank = int(os.environ['RANK'])
+        torch.cuda.set_device(local_rank)
+        torch.distributed.init_process_group(
+            world_size=torchrun_world_size, 
+            rank=global_rank, 
+            device_id=torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}"),
+            backend="nccl",
+        )
+
+        comm_tensor = torch.empty((64, 512, 512), device=torch.cuda.current_device(), dtype=torch.float16)
+        # torch.distributed.all_reduce(comm_tensor)
+        torch.distributed.barrier()
+        return
 
         # # GEMM
         # left_op = torch.randn((1024, 4, 4096), device="cuda", dtype=torch.float16)
@@ -154,7 +176,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -218,15 +240,15 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        offline_profiler.profile(opcode="gemm")
-        offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
-        offline_profiler.profile(opcode="layernorm")
-        offline_profiler.profile(opcode="dropout")
-        offline_profiler.profile(opcode="masked_fill_")
-        offline_profiler.profile(opcode="softmax")
+        # offline_profiler.profile(opcode="gemm")
+        # offline_profiler.profile(opcode="bmm")
+        # offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="layernorm")
+        # offline_profiler.profile(opcode="dropout")
+        # offline_profiler.profile(opcode="masked_fill_")
+        # offline_profiler.profile(opcode="softmax")
 
-        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
@@ -409,7 +431,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
