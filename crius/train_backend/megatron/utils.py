@@ -27,7 +27,7 @@ __all__ = [
 def initialize_virtual_distributed(
     tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1,
     data_parallel_size: int = 1, num_nodes: int = 1, num_devices_per_node: int = 1,
-    init_cpu_process_group: bool = True,
+    init_cpu_process_group: bool = True, skip_distributed_init: bool = True,
 ):
     """ Initialize a virtual Megatron backend without ALL underlying physical deivces. 
 
@@ -45,7 +45,15 @@ def initialize_virtual_distributed(
         num_nodes: Number of virtual nodes allocated for the training task.
         num_devices_per_node: Number of virtual devices per node.
         init_cpu_process_group: Whether to initialize a multi-process CPU process group.
+        skip_distributed_init: Whether to skip the distributed initialization. Used when not enough
+            nodes are allocated for the virtual backend (e.g., only have 1 node while profiling multi-node).
     """
+
+    if skip_distributed_init:
+        logger.info(f"=========> Skipping distributed initialization for virtual Megatron backend.")
+        torch.distributed.init_process_group(world_size=1, backend='gloo')
+        parallel_state.initialize_model_parallel()
+        return
 
     assert init_cpu_process_group
     torchrun_world_size = int(os.environ['WORLD_SIZE'])
@@ -53,7 +61,7 @@ def initialize_virtual_distributed(
         tensor_model_parallel_size * pipeline_model_parallel_size * data_parallel_size, 
         num_nodes * num_devices_per_node,
     ), f"The world size of torchrun ({torchrun_world_size}) is not properly set."
-    rank = int(os.environ['LOCAL_RANK'])
+    rank = int(os.environ['RANK'])
     torch.distributed.init_process_group(world_size=torchrun_world_size, rank=rank, backend='gloo')
 
     # Megatron core distributed training initialization

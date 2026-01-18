@@ -176,7 +176,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -251,7 +251,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -285,10 +285,10 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
 
-        global_configs.num_nodes = 1
+        global_configs.num_nodes = 2
         global_configs.num_devices_per_node = 4
 
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
         global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
