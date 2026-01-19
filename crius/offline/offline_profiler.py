@@ -734,7 +734,25 @@ class CriusOfflineDataManager:
             if parsed["num_comm_nodes"] == num_nodes and parsed["comm_group_size"] == group_size:
                 matched_records.append((parsed["comm_data_size"], profiled_data[key]))
 
-        raise NotImplementedError("Communication latency estimation is not implemented yet.")
+        print(matched_records)
+        exit(0)
+
+        matched_records = sorted(matched_records, key=lambda x: x[0])
+        for i in range(len(matched_records) - 1):
+            if matched_records[i][0] <= data_size <= matched_records[i + 1][0]:
+                x0, y0 = matched_records[i]
+                x1, y1 = matched_records[i + 1]
+                # Linear interpolation
+                latency = y0 + (y1 - y0) * (data_size - x0) / (x1 - x0)
+                return latency
+        
+        # Larger than the max profiled data size
+        if data_size > matched_records[-1][0]:
+            x0, y0 = matched_records[-2]
+            x1, y1 = matched_records[-1]
+            # Linear extrapolation
+            latency = y1 + (y1 - y0) / (x1 - x0) * (data_size - x1)
+            return latency
 
     def _profile_communication(
         self, opcode: str,

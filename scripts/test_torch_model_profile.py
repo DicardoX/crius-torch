@@ -230,7 +230,7 @@ class TorchModelProfileTest(unittest.TestCase):
             ],
             comm_data_sizes = [2**i for i in range(1,31)] + [
                 # Special volumes
-                102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
+                # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
                 # 6647250944,
             ],
         )
@@ -240,15 +240,15 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        offline_profiler.profile(opcode="gemm")
-        offline_profiler.profile(opcode="bmm")
-        offline_profiler.profile(opcode="baddbmm")
-        offline_profiler.profile(opcode="layernorm")
-        offline_profiler.profile(opcode="dropout")
-        offline_profiler.profile(opcode="masked_fill_")
-        offline_profiler.profile(opcode="softmax")
+        # offline_profiler.profile(opcode="gemm")
+        # offline_profiler.profile(opcode="bmm")
+        # offline_profiler.profile(opcode="baddbmm")
+        # offline_profiler.profile(opcode="layernorm")
+        # offline_profiler.profile(opcode="dropout")
+        # offline_profiler.profile(opcode="masked_fill_")
+        # offline_profiler.profile(opcode="softmax")
 
-        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
