@@ -240,6 +240,15 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
+        CriusOfflineDataManager.estimate_communication_latency_ms(
+            opcode="all_reduce",
+            data_size=204800000,
+            group_size=8,
+            num_nodes=2,
+            profiled_data=offline_profiler.recorder.data,
+        )
+        exit(0)
+
         # offline_profiler.profile(opcode="gemm")
         # offline_profiler.profile(opcode="bmm")
         # offline_profiler.profile(opcode="baddbmm")

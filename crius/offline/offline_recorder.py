@@ -88,41 +88,47 @@ class OfflineDataRecorder:
 
         if op_type == "gemm":
             if "*" not in layout:
-                return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout[{layout}]"
+                return f"{op_type}__b{batch_size}__s{seq_len}__l{left_op_hidden_dim}__r{right_op_hidden_dim}__layout[{layout}]"
             else:
                 # Batch size and sequence length dimensions are merged (used in weight gradient computation)
                 if batch_size > 1:
                     seq_len *= batch_size   # Accumulated
-                return f"{op_type}_b*s{seq_len}_l{left_op_hidden_dim}_r{right_op_hidden_dim}_layout[{layout}]"
+                return f"{op_type}__b*s{seq_len}__l{left_op_hidden_dim}__r{right_op_hidden_dim}__layout[{layout}]"
         elif op_type in ("bmm", "baddbmm"):
             assert right_op_hidden_dim is None
             if attn_head_split:
                 batch_size *= num_attn_heads
                 left_op_hidden_dim = left_op_hidden_dim // num_attn_heads
-            return f"{op_type}_b{batch_size}_s{seq_len}_l{left_op_hidden_dim}_layout[{layout}]"
+            return f"{op_type}__b{batch_size}__s{seq_len}__l{left_op_hidden_dim}__layout[{layout}]"
         elif op_type == "layernorm":
-            return f"{op_type}_b{batch_size}_s{seq_len}_h{left_op_hidden_dim}_layout[{layout}]"
+            return f"{op_type}__b{batch_size}__s{seq_len}__h{left_op_hidden_dim}__layout[{layout}]"
         elif op_type == "dropout":
             if left_op_hidden_dim is None:
-                return f"{op_type}_b{batch_size}_s{seq_len}_n{num_attn_heads}_layout[{layout}]"
+                return f"{op_type}__b{batch_size}__s{seq_len}__n{num_attn_heads}__layout[{layout}]"
             elif num_attn_heads is None:
-                return f"{op_type}_b{batch_size}_s{seq_len}_h{left_op_hidden_dim}_layout[{layout}]"
+                return f"{op_type}__b{batch_size}__s{seq_len}__h{left_op_hidden_dim}__layout[{layout}]"
             else:
                 raise ValueError("For Dropout op, either left_op_hidden_dim or num_attn_heads should be None.")
         elif op_type in ("masked_fill_", "softmax",):
-            return f"{op_type}_b{batch_size}_s{seq_len}_n{num_attn_heads}_layout[{layout}]"
+            return f"{op_type}__b{batch_size}__s{seq_len}__n{num_attn_heads}__layout[{layout}]"
         elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
-            return f"{op_type}_n{num_comm_nodes}_gs{comm_group_size}_d{comm_data_size}"
+            return f"{op_type}__n{num_comm_nodes}__gs{comm_group_size}__d{comm_data_size}"
         else:
             return None
     
     @classmethod
     def parse_query_key(cls, query_key: str) -> dict:
         """ Parse a query key into its components. """
-        components = query_key.split('_')
+        
+        components = query_key.split('__')
         parsed = {}
-        for comp in components:
+        for i in range(len(components)):
+            comp = components[i]
+            if i == 0:
+                parsed['op_type'] = comp
+                continue
+
             if comp.startswith('b'):
                 parsed['batch_size'] = int(comp[1:]) if comp[1:] != 'None' else None
             elif comp.startswith('s'):
@@ -132,7 +138,10 @@ class OfflineDataRecorder:
             elif comp.startswith('r'):
                 parsed['right_op_hidden_dim'] = int(comp[1:]) if comp[1:] != 'None' else None
             elif comp.startswith('n'):
-                parsed['num_attn_heads'] = int(comp[1:]) if comp[1:] != 'None' else None
+                if parsed['op_type'] in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+                    parsed['num_comm_nodes'] = int(comp[1:]) if comp[1:] != 'None' else None
+                else:
+                    parsed['num_attn_heads'] = int(comp[1:]) if comp[1:] != 'None' else None
             elif comp.startswith('h'):
                 parsed['hidden_dim'] = int(comp[1:]) if comp[1:] != 'None' else None
             elif comp.startswith('gs'):
@@ -143,5 +152,6 @@ class OfflineDataRecorder:
                 layout_str = comp.split('[')[1].rstrip(']') if 'None' not in comp else None
                 parsed['layout'] = layout_str
             else:
-                parsed['op_type'] = comp
+                raise ValueError(f"Unknown component in query key: {comp}")
+        
         return parsed

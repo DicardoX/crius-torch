@@ -730,29 +730,31 @@ class CriusOfflineDataManager:
             if opcode not in key:
                 continue
 
+            if "__" not in key:
+                # FIXME: Skip legacy key format.
+                continue
+
             parsed = OfflineDataRecorder.parse_query_key(key)
             if parsed["num_comm_nodes"] == num_nodes and parsed["comm_group_size"] == group_size:
                 matched_records.append((parsed["comm_data_size"], profiled_data[key]))
 
-        print(matched_records)
-        exit(0)
-
         matched_records = sorted(matched_records, key=lambda x: x[0])
+        latency_ms = 0.0
         for i in range(len(matched_records) - 1):
             if matched_records[i][0] <= data_size <= matched_records[i + 1][0]:
-                x0, y0 = matched_records[i]
-                x1, y1 = matched_records[i + 1]
+                x0, y0 = matched_records[i][0], matched_records[i][1]["latency_ms"]
+                x1, y1 = matched_records[i + 1][0], matched_records[i + 1][1]["latency_ms"]
                 # Linear interpolation
-                latency = y0 + (y1 - y0) * (data_size - x0) / (x1 - x0)
-                return latency
+                latency_ms = y0 + (y1 - y0) * (data_size - x0) / (x1 - x0)
         
         # Larger than the max profiled data size
         if data_size > matched_records[-1][0]:
-            x0, y0 = matched_records[-2]
-            x1, y1 = matched_records[-1]
+            x0, y0 = matched_records[-2][0], matched_records[-2][1]["latency_ms"]
+            x1, y1 = matched_records[-1][0], matched_records[-1][1]["latency_ms"]
             # Linear extrapolation
-            latency = y1 + (y1 - y0) / (x1 - x0) * (data_size - x1)
-            return latency
+            latency_ms = y1 + (y1 - y0) / (x1 - x0) * (data_size - x1)
+        
+        return latency_ms
 
     def _profile_communication(
         self, opcode: str,
