@@ -719,6 +719,23 @@ class CriusOfflineDataManager:
                                     f"seq_len: {seq_len}, #attn_heads: {num_heads}, latency (ms): {op_latency}")
                         self.recorder.write_one_entry(query_key, op_latency, None)
 
+    @classmethod
+    def estimate_communication_latency_ms(
+        cls, opcode: str, data_size: int, group_size: int, num_nodes: int, profiled_data: Dict,
+    ) -> float:
+        """ Estimate the communication latency based on the profiled data with interpolation. """
+
+        matched_records = []
+        for key in profiled_data.keys():
+            if opcode not in key:
+                continue
+
+            parsed = OfflineDataRecorder.parse_query_key(key)
+            if parsed["num_comm_nodes"] == num_nodes and parsed["comm_group_size"] == group_size:
+                matched_records.append((parsed["comm_data_size"], profiled_data[key]))
+
+        raise NotImplementedError("Communication latency estimation is not implemented yet.")
+
     def _profile_communication(
         self, opcode: str,
     ) -> None:

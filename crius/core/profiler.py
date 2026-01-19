@@ -20,6 +20,7 @@ from crius.compile import (compile, CompileConfigs)
 from crius.compile.graph import IRGraph, IRNode
 # from crius.offline.offline_profiler import CriusOfflineDataManager
 from crius.offline.offline_recorder import OfflineDataRecorder
+from crius.offline.offline_profiler import CriusOfflineDataManager
 from crius.global_envs import logger, global_configs, dtype_to_bytes
 
 
@@ -213,8 +214,14 @@ class CriusDistProfiler:
                         if query_key in self._profiled_data:
                             node_latency = self._profiled_data[query_key]["latency_ms"]
                         elif query_key is not None:
-                            raise ValueError(f"Query key {query_key} not found in profiled data.")
-                            logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
+                            if node.layer_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", ):
+                                # Estimate communication operator latency with interpolation
+                                node_latency = CriusOfflineDataManager.estimate_communication_latency_ms(
+                                    node.layer_type, comm_data_size, comm_group_size, num_comm_nodes, self._profiled_data,
+                                )
+                            else:
+                                raise ValueError(f"Query key {query_key} not found in profiled data.")
+                                logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
 
                     setattr(node, "latency", node_latency)
                 else:
