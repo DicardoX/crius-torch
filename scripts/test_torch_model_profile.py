@@ -176,7 +176,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
         print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -228,7 +228,8 @@ class TorchModelProfileTest(unittest.TestCase):
             softmax_op_num_attn_heads=[
                 8, 16, 32,
             ],
-            comm_data_sizes = [2**i for i in range(1,31)] + [
+            comm_data_sizes = [2**i for i in range(1,28)] + [
+            # comm_data_sizes = [2**i for i in range(1,31)] + [
                 # Special volumes
                 # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
                 # 6647250944,
@@ -240,15 +241,6 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        CriusOfflineDataManager.estimate_communication_latency_ms(
-            opcode="all_reduce",
-            data_size=204800000,
-            group_size=8,
-            num_nodes=2,
-            profiled_data=offline_profiler.recorder.data,
-        )
-        exit(0)
-
         # offline_profiler.profile(opcode="gemm")
         # offline_profiler.profile(opcode="bmm")
         # offline_profiler.profile(opcode="baddbmm")
@@ -257,10 +249,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        offline_profiler.profile(opcode="all_reduce")
-        # offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -320,7 +312,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_boundary_end_marker = ['dropout', 'add', ]
         # pipeline_boundary_start_marker = ['input_layernorm', ]
         pipeline_boundary_end_marker = ['final_layernorm', ]
-        pipeline_forced_p2p_comm_overhead_ms = 10.0
+        # pipeline_forced_p2p_comm_overhead_ms = 10.0
+        pipeline_forced_p2p_comm_overhead_ms = -1.0
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -586,7 +579,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
         )
         trainer.train()
 

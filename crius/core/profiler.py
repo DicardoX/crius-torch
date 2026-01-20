@@ -287,7 +287,7 @@ class CriusDistProfiler:
                 num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
             return (parallelism_plan.data_parallel_degree, num_comm_nodes)
         elif parallelism == "pp":
-            return (2, 1)   # P2P communication, FIXME(chunyu): Currently assumed as 1 node
+            return (2, 1) if global_configs.num_nodes == 1 else (2, 2)
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")
 
@@ -392,7 +392,7 @@ class CriusDistProfiler:
         self, graph: IRGraph, parallelism_plan: ParallelismPlan, params_dtype: torch.dtype,
     ) -> List[float]:
         """ Estimate P2P communication latencies in pipeline-parallel forward/backward pass. """
-        
+
         if (
             parallelism_plan is None or
             parallelism_plan.pipeline_parallel_degree == 1 or
@@ -405,10 +405,10 @@ class CriusDistProfiler:
                 parallelism_plan.pipeline_forced_p2p_comm_overhead_ms 
                     for _ in range(parallelism_plan.pipeline_parallel_degree - 1)
             ]
-
+        
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp")
         nbytes_per_numel = dtype_to_bytes[params_dtype]
-        p2p_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
+        p2p_latencies = [[0.0, 0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
         cur_stage_index = 0
         prev_node = None
         for node in graph.nodes:
@@ -419,7 +419,11 @@ class CriusDistProfiler:
                 query_key = OfflineDataRecorder.get_query_key(
                     "p2p", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
                 )
-                node_p2p_latency = 0.0
+                assert query_key is not None
+                print(query_key)
+                exit(0)
+
+                node_p2p_latency = [0.0, 0.0, 0.0]  # send, recv, send_recv
                 if self._profiled_data is not None and query_key in self._profiled_data:
                     node_p2p_latency = self._profiled_data[query_key]["latency_ms"]
                 else:
@@ -427,10 +431,13 @@ class CriusDistProfiler:
                                         f"in profiled data for P2P latency estimation.")
                     logger.warning(f"Query key {query_key} not found in profiled data for P2P latency estimation, " + 
                                     f"using default latency {node_p2p_latency}ms.")
-                p2p_latencies[cur_stage_index] += node_p2p_latency
+                p2p_latencies[cur_stage_index] = node_p2p_latency
                 cur_stage_index = node.stage_index
             
             prev_node = node
+
+        print(p2p_latencies)
+        exit(0)
 
         return p2p_latencies
 

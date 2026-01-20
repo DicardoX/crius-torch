@@ -1,4 +1,4 @@
-from typing import overload
+from typing import overload, Union, List
 import os
 import pickle
 import gc 
@@ -48,7 +48,7 @@ class OfflineDataRecorder:
             with open(self._path, 'rb') as f:
                 self.data = pickle.load(f)
     
-    def write_one_entry(self, key: str, latency_ms: float, memory_footprint_mb: float,) -> None:
+    def write_one_entry(self, key: str, latency_ms: Union[float, List[float]], memory_footprint_mb: float,) -> None:
         """ Write a single profiling entry to the data store. """
         if key in self.data and not self.force_overwrite:
             raise ValueError(f"Key {key} already exists in the profiling data.")
@@ -111,7 +111,7 @@ class OfflineDataRecorder:
                 raise ValueError("For Dropout op, either left_op_hidden_dim or num_attn_heads should be None.")
         elif op_type in ("masked_fill_", "softmax",):
             return f"{op_type}__b{batch_size}__s{seq_len}__n{num_attn_heads}__layout[{layout}]"
-        elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
+        elif op_type in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter", "p2p", ):
             assert comm_group_size is not None, f"Communication group size ({comm_group_size}) is not set."
             return f"{op_type}__n{num_comm_nodes}__gs{comm_group_size}__d{comm_data_size}"
         else:
