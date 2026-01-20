@@ -359,7 +359,7 @@ class CriusDistProfiler:
 
         # FIXME(chunyu): Seems that the grad sync communication size is not totally matched with the ground truth.
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "dp")
-        nbytes_per_numel = dtype_to_bytes[params_dtype]
+        # nbytes_per_numel = dtype_to_bytes[params_dtype]
         grad_sync_comm_sizes = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         for node in graph.nodes:
@@ -368,7 +368,8 @@ class CriusDistProfiler:
                 assert len(node.input_shapes) == 2, "Invalid gemm input shapes."
                 assert len(node.input_shapes[1]) == 2, f"Invalid gemm weight shape: {node.input_shapes[1]}."
                 weight_numel = np.prod(node.input_shapes[1])
-                comm_data_size = weight_numel * nbytes_per_numel
+                # comm_data_size = weight_numel * nbytes_per_numel
+                comm_data_size = weight_numel
                 grad_sync_comm_sizes[node.stage_index] += int(comm_data_size)
 
         for i in range(parallelism_plan.pipeline_parallel_degree):
@@ -376,15 +377,19 @@ class CriusDistProfiler:
             query_key = OfflineDataRecorder.get_query_key(
                 "all_reduce", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
             )
-            node_grad_sync_latency = 0.0
+            grad_sync_latency = 0.0
             if self._profiled_data is not None and query_key in self._profiled_data:
-                node_grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
+                grad_sync_latency = self._profiled_data[query_key]["latency_ms"]
             else:
-                raise ValueError(f"Grad sync query key {query_key} not found " + 
-                                    f"in profiled data for grad sync estimation.")
-                logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
-                                f"using default latency {node_grad_sync_latency}ms.")
-            grad_sync_latencies[i] = node_grad_sync_latency
+                # Estimate communication operator latency with interpolation
+                grad_sync_latency = CriusOfflineDataManager.estimate_communication_latency_ms(
+                    "all_reduce", comm_data_size, comm_group_size, num_comm_nodes, self._profiled_data,
+                )
+                # raise ValueError(f"Grad sync query key {query_key} not found " + 
+                #                     f"in profiled data for grad sync estimation.")
+                # logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
+                #                 f"using default latency {node_grad_sync_latency}ms.")
+            grad_sync_latencies[i] = grad_sync_latency * parallelism_plan.forced_grad_sync_latency_scale_factor
 
         return grad_sync_latencies
 
@@ -407,7 +412,7 @@ class CriusDistProfiler:
             ]
         
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp")
-        nbytes_per_numel = dtype_to_bytes[params_dtype]
+        # nbytes_per_numel = dtype_to_bytes[params_dtype]
         p2p_latencies = [[0.0, 0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
         cur_stage_index = 0
         prev_node = None
@@ -415,7 +420,7 @@ class CriusDistProfiler:
             if node.stage_index != cur_stage_index:
                 assert node.stage_index == cur_stage_index + 1, "Invalid stage index increment."        
                 p2p_numel = np.prod(prev_node.input_shapes[0])
-                comm_data_size = p2p_numel * nbytes_per_numel
+                comm_data_size = p2p_numel
                 query_key = OfflineDataRecorder.get_query_key(
                     "p2p", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
                 )
@@ -483,11 +488,11 @@ class CriusDistProfiler:
             return t_fw
         
         warmup_send_latencies = [0.0 for _ in range(num_stages - 1)]
-        steady_last_stage_send_recv_latencies = 0.0
+        steady_last_stage_send_recv_latency = 0.0
         drain_recv_latencies = [0.0 for _ in range(num_stages - 1)]
         if not overlap_p2p_comm:
-            warmup_send_latencies = [p2p_latencies[i][0] for i in range(num_stages - 1)]  # Only send
-            steady_last_stage_send_recv_latency = p2p_latencies[-1][2]    # Send + recv
+            warmup_send_latencies = [p2p_latencies[i][0] for i in range(num_stages - 1)]    # Only send
+            steady_last_stage_send_recv_latency = p2p_latencies[-1][2] if len(p2p_latencies) > 0 else 0.0   # Send + recv
             drain_recv_latencies = [p2p_latencies[i][1] for i in range(num_stages - 1)]    # Only recv
         else:
             raise NotImplementedError

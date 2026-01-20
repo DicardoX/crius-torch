@@ -52,6 +52,11 @@ class ParallelismPlan:
     """ When DP degree < #GPUs (i.e., in hybrid parallelism), performing gradient synchronization across all GPUs, 
     rather than only across DP replicas. """
 
+    forced_grad_sync_latency_scale_factor: float = 1.0
+    """ Scale factor for the estimated gradient synchronization latency across all GPUs during backward pass.
+    Used (and to be tuned) when in multi-node setting, because we find that the cross-node grad sync overhead of DDP
+    is quite larger than intra-node one (not existed in intra-node DDP). """
+
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
     Detailed in `class CriusParallelPlanner`."""
