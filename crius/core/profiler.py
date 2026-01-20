@@ -482,24 +482,30 @@ class CriusDistProfiler:
             t_fw = np.max(fw_lats) * (num_microbatches - 1) + np.sum(fw_lats)
             return t_fw
         
+        warmup_send_latencies = [0.0 for _ in range(num_stages - 1)]
+        steady_last_stage_send_recv_latencies = 0.0
+        drain_recv_latencies = [0.0 for _ in range(num_stages - 1)]
         if not overlap_p2p_comm:
-            # TODO(chunyu): Add p2p latency with send/recv/send_recv types.
-            for i in range(len(p2p_latencies)):
-                stage_latencies[i + 1][0] += p2p_latencies[i]
-                stage_latencies[i + 1][1] += p2p_latencies[i]
+            warmup_send_latencies = [p2p_latencies[i][0] for i in range(num_stages - 1)]  # Only send
+            steady_last_stage_send_recv_latency = p2p_latencies[-1][2]    # Send + recv
+            drain_recv_latencies = [p2p_latencies[i][1] for i in range(num_stages - 1)]    # Only recv
         else:
             raise NotImplementedError
 
         # Phase 1. Warmup
-        t_warmup = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])
+        t_warmup = np.sum([stage_latencies[i][0] + warmup_send_latencies[i] for i in range(num_stages - 1)])
 
         # Phase 2. Steady
         # NOTE: Here, we assume perfect load balancing across pipeline stages. Therefore, we use 
         #       the last stage's latency refer to DynaPipe's Figure 10.
-        t_steady = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1])
+        t_steady = num_microbatches * (
+            stage_latencies[-1][0] + stage_latencies[-1][1] + 
+            steady_last_stage_send_recv_latency
+        )
 
         # Phase 3. Drain
         # NOTE: Approximation: grad sync overhead remains nearly similar across stages
-        t_drain = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)]) + np.max(grad_sync_latencies)
+        t_drain = np.sum([stage_latencies[i][1] + drain_recv_latencies[i] for i in range(num_stages - 1)]) \
+            + np.max(grad_sync_latencies)
 
         return (t_warmup + t_steady + t_drain)
