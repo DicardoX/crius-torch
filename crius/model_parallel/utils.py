@@ -57,6 +57,9 @@ class ParallelismPlan:
     Used (and to be tuned) when in multi-node setting, because we find that the cross-node grad sync overhead of DDP
     is quite larger than intra-node one (not existed in intra-node DDP). """
 
+    forced_p2p_latency_scale_factor: float = 1.0
+    """ Scale factor for the estimated P2P communication latency during pipeline execution. """
+
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 
     Detailed in `class CriusParallelPlanner`."""

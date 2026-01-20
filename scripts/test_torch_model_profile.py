@@ -281,9 +281,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 2048
+        num_micro_batches = 8
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -296,8 +296,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_devices_per_node = 4
 
         global_configs.tensor_model_parallel_size = 4
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -321,6 +321,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_forced_p2p_comm_overhead_ms = 10.0
         pipeline_forced_p2p_comm_overhead_ms = -1.0
         forced_grad_sync_latency_scale_factor = 4.0     # Manually tuned
+        forced_p2p_latency_scale_factor = 3.0           # Manually tuned
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -331,6 +332,7 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,
             forced_grad_sync_latency_scale_factor=forced_grad_sync_latency_scale_factor,
+            forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
             pipeline_forced_p2p_comm_overhead_ms=pipeline_forced_p2p_comm_overhead_ms,

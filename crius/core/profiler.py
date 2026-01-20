@@ -415,18 +415,21 @@ class CriusDistProfiler:
         # nbytes_per_numel = dtype_to_bytes[params_dtype]
         p2p_latencies = [[0.0, 0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
         cur_stage_index = 0
-        prev_node = None
         for node in graph.nodes:
             if node.stage_index != cur_stage_index:
                 assert node.stage_index == cur_stage_index + 1, "Invalid stage index increment."        
-                p2p_numel = np.prod(prev_node.input_shapes[0])
+                assert len(node.input_shapes) == 1, f"Invalid P2P node input shapes: {node.input_shapes}."
+                p2p_numel = np.prod(node.input_shapes)
                 comm_data_size = p2p_numel
                 query_key = OfflineDataRecorder.get_query_key(
                     "p2p", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
                 )
                 node_p2p_latency = [0.0, 0.0, 0.0]  # send, recv, send_recv
                 if self._profiled_data is not None and query_key in self._profiled_data:
-                    node_p2p_latency = self._profiled_data[query_key]["latency_ms"]
+                    node_p2p_latency = [
+                        _lat * parallelism_plan.forced_p2p_latency_scale_factor 
+                        for _lat in self._profiled_data[query_key]["latency_ms"]
+                    ]
                 else:
                     raise ValueError(f"P2P communication query key {query_key} not found " + 
                                         f"in profiled data for P2P latency estimation.")
@@ -434,8 +437,6 @@ class CriusDistProfiler:
                                     f"using default latency {node_p2p_latency}ms.")
                 p2p_latencies[cur_stage_index] = node_p2p_latency
                 cur_stage_index = node.stage_index
-            
-            prev_node = node
 
         return p2p_latencies
 
