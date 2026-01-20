@@ -390,7 +390,7 @@ class CriusDistProfiler:
 
     def _estimate_p2p_latencies_in_pp(
         self, graph: IRGraph, parallelism_plan: ParallelismPlan, params_dtype: torch.dtype,
-    ) -> List[float]:
+    ) -> List[List[float]]:
         """ Estimate P2P communication latencies in pipeline-parallel forward/backward pass. """
 
         if (
@@ -419,10 +419,6 @@ class CriusDistProfiler:
                 query_key = OfflineDataRecorder.get_query_key(
                     "p2p", None, None, None, None, None, None, num_comm_nodes, comm_group_size, comm_data_size,
                 )
-                assert query_key is not None
-                print(query_key)
-                exit(0)
-
                 node_p2p_latency = [0.0, 0.0, 0.0]  # send, recv, send_recv
                 if self._profiled_data is not None and query_key in self._profiled_data:
                     node_p2p_latency = self._profiled_data[query_key]["latency_ms"]
@@ -436,13 +432,10 @@ class CriusDistProfiler:
             
             prev_node = node
 
-        print(p2p_latencies)
-        exit(0)
-
         return p2p_latencies
 
     def _model_e2e_pipeline_latency_with_oom_check(
-        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[float],
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[List[float]],
         parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ Compute model end-to-end pipeline latency with OOM check. """
@@ -455,7 +448,7 @@ class CriusDistProfiler:
             raise ValueError(f"Pipeline type {parallelism_plan.pipeline_type} is not supported yet.")
     
     def _model_e2e_pipeline_latency_with_oom_check_1f1b_schedule(
-        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[float],
+        self, stage_latencies: List[List[float]], grad_sync_latencies: List[float], p2p_latencies: List[List[float]],
         parallelism_plan: ParallelismPlan, only_forward: bool = False,
     ) -> Optional[float]:
         """ 1F1B pipeline schedule. 
@@ -482,7 +475,7 @@ class CriusDistProfiler:
             fw_lats = [_l[0] for _l in stage_latencies]
             if not overlap_p2p_comm:
                 for i in range(len(p2p_latencies)):
-                    fw_lats[i + 1] += p2p_latencies[i]
+                    fw_lats[i + 1] += p2p_latencies[i][0]   # Only send
             else:
                 raise NotImplementedError
 
@@ -490,6 +483,7 @@ class CriusDistProfiler:
             return t_fw
         
         if not overlap_p2p_comm:
+            # TODO(chunyu): Add p2p latency with send/recv/send_recv types.
             for i in range(len(p2p_latencies)):
                 stage_latencies[i + 1][0] += p2p_latencies[i]
                 stage_latencies[i + 1][1] += p2p_latencies[i]
