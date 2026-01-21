@@ -85,9 +85,9 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # TODO(chunyu): Debug why there is a large gap between offline and megatron's online P2P overhead.
 
-        num_warmup_steps = 1
+        num_warmup_steps = 0
         num_profile_steps = 1
-        use_pytorch_profiler = False
+        use_pytorch_profiler = True
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
 
@@ -105,9 +105,11 @@ class TorchModelProfileTest(unittest.TestCase):
         )
 
         # comm_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
-        comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
+        # comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
         # comm_tensor = torch.empty((1219321856,), device=torch.cuda.current_device(), dtype=torch.float16)
-        torch.cuda.synchronize()        
+        send_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
+        recv_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
+        torch.cuda.synchronize()
 
         # # GEMM
         # left_op = torch.randn((1024, 4, 4096), device="cuda", dtype=torch.float16)
@@ -129,17 +131,51 @@ class TorchModelProfileTest(unittest.TestCase):
         # value = -10000.0
         # torch.cuda.synchronize()
 
+        def __p2p_communication(p2p_type: str = "send_recv"):
+            ops = []
+            send_next_op, recv_next_op, send_prev_op, recv_prev_op = None, None, None, None
+            if global_rank == 0:
+                if p2p_type in ("send_recv", "send"):
+                    send_next_op = torch.distributed.P2POp(
+                        torch.distributed.isend, send_tensor, 1,
+                    )
+                if p2p_type in ("send_recv", "recv"):
+                    recv_next_op = torch.distributed.P2POp(
+                        torch.distributed.irecv, recv_tensor, 1,
+                    )
+                ops.append(send_next_op)
+                ops.append(recv_next_op)
+            
+            elif global_rank == 1:
+                if p2p_type in ("send_recv", "send"):
+                    recv_prev_op = torch.distributed.P2POp(
+                        torch.distributed.irecv, recv_tensor, 0,
+                    )
+                if p2p_type in ("send_recv", "recv"):
+                    send_prev_op = torch.distributed.P2POp(
+                        torch.distributed.isend, send_tensor, 0,
+                    )
+                ops.append(recv_prev_op)
+                ops.append(send_prev_op)
+            
+            reqs = torch.distributed.batch_isend_irecv([_op for _op in ops if _op is not None])
+            for req in reqs:
+                req.wait()
+            reqs = None
+
         for _ in range(num_warmup_steps):
             if use_transposed_weight:
                 # _ = torch.matmul(left_op, right_op.t())
                 # input_op.masked_fill_(mask, value)
                 # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                torch.distributed.all_reduce(comm_tensor)
+                # torch.distributed.all_reduce(comm_tensor)
+                __p2p_communication()
             else:
                 # _ = torch.matmul(left_op, right_op)
                 # input_op.masked_fill_(mask, value)
                 # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                torch.distributed.all_reduce(comm_tensor)
+                # torch.distributed.all_reduce(comm_tensor)
+                __p2p_communication()
         torch.cuda.synchronize()
         
         if use_pytorch_profiler:
@@ -164,13 +200,15 @@ class TorchModelProfileTest(unittest.TestCase):
                 # input_op.masked_fill_(mask, value)
                 with torch.no_grad():
                     # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                    torch.distributed.all_reduce(comm_tensor)
+                    # torch.distributed.all_reduce(comm_tensor)
+                    __p2p_communication()
             else:
                 # _ = torch.matmul(left_op, right_op)
                 # input_op.masked_fill_(mask, value)
                 with torch.no_grad():
                     # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                    torch.distributed.all_reduce(comm_tensor)
+                    # torch.distributed.all_reduce(comm_tensor)
+                    __p2p_communication()
         
         end_event.record()
         end_event.synchronize()
@@ -260,7 +298,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -283,9 +321,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
-        seq_len = 2048
-        num_micro_batches = 8
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -323,7 +361,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_forced_p2p_comm_overhead_ms = 10.0
         pipeline_forced_p2p_comm_overhead_ms = -1.0
         forced_grad_sync_latency_scale_factor = 4.0     # Manually tuned
-        forced_p2p_latency_scale_factor = 3.0           # Manually tuned
+        forced_p2p_latency_scale_factor = 1.0           # Manually tuned
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -478,16 +516,16 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 16
+        global_bs = 8
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 3
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 4
@@ -592,6 +630,8 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_strategy="1f1b",
             forward_only=False,
             use_pytorch_profiler=True,
+            pytorch_profiler_dp_ranks=[0,], 
+            pytorch_profiler_tp_ranks=[0, 1,],
         )
         trainer.train()
 

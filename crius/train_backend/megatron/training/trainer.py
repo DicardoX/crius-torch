@@ -76,6 +76,8 @@ class Trainer:
         pipeline_strategy: str = None,
         forward_only: bool = False,
         use_pytorch_profiler: bool = False,
+        pytorch_profiler_dp_ranks: List[int] = [],
+        pytorch_profiler_tp_ranks: List[int] = [],
     ) -> None:
         """ Initialize a Trainer object. """
 
@@ -92,8 +94,10 @@ class Trainer:
         if use_pytorch_profiler:
             dp_rank = parallel_state.get_data_parallel_rank()
             tp_rank = parallel_state.get_tensor_model_parallel_rank()
-            if dp_rank > 0 or tp_rank > 0:
-                # Only enable profiler on dp0 and tp0
+            if (
+                dp_rank not in pytorch_profiler_dp_ranks or 
+                tp_rank not in pytorch_profiler_tp_ranks
+            ):
                 self.use_pytorch_profiler = False
 
         self.forward_step_func = forward_step_func
@@ -208,10 +212,11 @@ class Trainer:
         if self.use_pytorch_profiler:
             prof.stop()
             pp_rank = parallel_state.get_pipeline_model_parallel_rank()
-            prof.export_chrome_trace(f"/app/torch_exec_trace_pp_rank_{pp_rank}.json")
+            tp_rank = parallel_state.get_tensor_model_parallel_rank()
+            prof.export_chrome_trace(f"/app/torch_exec_trace_pp_rank_{pp_rank}_tp_rank_{tp_rank}.json")
             log_on_rank(
-                msg=f"Save PyTorch execution trace to /app/torch_exec_trace_pp_rank_{pp_rank}.json",
-                rank=[0, parallel_state.get_pipeline_model_parallel_last_rank()],
+                msg=f"Save PyTorch execution trace to /app/torch_exec_trace_pp_rank_{pp_rank}_tp_rank_{tp_rank}.json",
+                rank=[0, parallel_state.get_pipeline_model_parallel_first_rank()],
                 group_type=["tensor", "pipeline"],
                 logger=logger,
                 log_level="info",

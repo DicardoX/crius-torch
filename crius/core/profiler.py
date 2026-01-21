@@ -426,15 +426,19 @@ class CriusDistProfiler:
                 )
                 node_p2p_latency = [0.0, 0.0, 0.0]  # send, recv, send_recv
                 if self._profiled_data is not None and query_key in self._profiled_data:
+                    # Each TP rank of the P2P sender would independently send P2P data to the corresponding 
+                    # TP rank of the P2P receiver, so we scale the latency by TP degree.
                     node_p2p_latency = [
-                        _lat * parallelism_plan.forced_p2p_latency_scale_factor 
+                        _lat * parallelism_plan.tensor_parallel_degree * parallelism_plan.forced_p2p_latency_scale_factor 
                         for _lat in self._profiled_data[query_key]["latency_ms"]
                     ]
+
                 else:
                     raise ValueError(f"P2P communication query key {query_key} not found " + 
                                         f"in profiled data for P2P latency estimation.")
                     logger.warning(f"Query key {query_key} not found in profiled data for P2P latency estimation, " + 
                                     f"using default latency {node_p2p_latency}ms.")
+                
                 p2p_latencies[cur_stage_index] = node_p2p_latency
                 cur_stage_index = node.stage_index
 
