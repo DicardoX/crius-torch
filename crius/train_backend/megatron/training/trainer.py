@@ -162,6 +162,7 @@ class Trainer:
             self.opt_param_scheduler.step(increment=increment)
         
         torch.cuda.synchronize()
+        torch.distributed.barrier()
         return (tr_loss, ) if last_stage else (None, )
 
     def train(self, report_metrics: bool = True) -> List[float]:
