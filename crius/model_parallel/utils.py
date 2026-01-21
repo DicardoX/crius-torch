@@ -4,7 +4,7 @@
 
 """ Utilities for model parallelism. """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 
 import torch
@@ -57,8 +57,19 @@ class ParallelismPlan:
     Used (and to be tuned) when in multi-node setting, because we find that the cross-node grad sync overhead of DDP
     is quite larger than intra-node one (not existed in intra-node DDP). """
 
-    forced_p2p_latency_scale_factor: float = 1.0
-    """ Scale factor for the estimated P2P communication latency during pipeline execution. """
+    use_many_to_many_p2p_offline_data: bool = True
+    """ Use many-to-many P2P offline profiled data for P2P communication latency estimation during pipeline execution. 
+    If False, one-to-one P2P offline profiled data will be used with a scale factor. """
+
+    forced_p2p_latency_scale_factor: Union[float, List[float]] = 1.0
+    """ Scale factor for the estimated P2P communication latency during pipeline execution. 
+    Used (and to be tuned) when P2P data is profiled using one-to-one ranks (then multiplied with #PP groups), rather 
+    than directly many-to-many ranks. There will be a decay factor when approximating many-to-many P2P latency using one-to-one, 
+    because of the possible communication overlap across P2P kernels.
+
+    For send or recv operations, the decay factor is usually close to 1.0 (e.g., 0.95); for send_recv operations, the 
+    decay factor is more significant (e.g., 0.6).
+    """
 
     pipeline_stage_partition_method: str = "uniform"
     """ How to partition operators into stages. Options: ['uniform', 'auto', ]. 

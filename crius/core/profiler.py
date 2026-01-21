@@ -426,13 +426,19 @@ class CriusDistProfiler:
                 )
                 node_p2p_latency = [0.0, 0.0, 0.0]  # send, recv, send_recv
                 if self._profiled_data is not None and query_key in self._profiled_data:
-                    # Each TP rank of the P2P sender would independently send P2P data to the corresponding 
-                    # TP rank of the P2P receiver, so we scale the latency by TP degree.
-                    node_p2p_latency = [
-                        _lat * parallelism_plan.tensor_parallel_degree * parallelism_plan.forced_p2p_latency_scale_factor 
-                        for _lat in self._profiled_data[query_key]["latency_ms"]
-                    ]
-
+                    if not parallelism_plan.use_many_to_many_p2p_offline_data:
+                        # Each TP rank of the P2P sender would independently send P2P data to the corresponding 
+                        # TP rank of the P2P receiver, so we scale the latency by TP degree.
+                        node_p2p_latency = [
+                            _lat * parallelism_plan.tensor_parallel_degree 
+                                for _lat in self._profiled_data[query_key]["latency_ms"]
+                        ]
+                        node_p2p_latency[0] = node_p2p_latency[0] * parallelism_plan.forced_p2p_latency_scale_factor[0]
+                        node_p2p_latency[1] = node_p2p_latency[1] * parallelism_plan.forced_p2p_latency_scale_factor[0]
+                        node_p2p_latency[2] = node_p2p_latency[2] * parallelism_plan.forced_p2p_latency_scale_factor[1]
+                    else:
+                        # Many-to-many P2P communication profiled data is used directly
+                        node_p2p_latency = self._profiled_data[query_key]["latency_ms"]
                 else:
                     raise ValueError(f"P2P communication query key {query_key} not found " + 
                                         f"in profiled data for P2P latency estimation.")
@@ -508,10 +514,8 @@ class CriusDistProfiler:
         # Phase 2. Steady
         # NOTE: Here, we assume perfect load balancing across pipeline stages. Therefore, we use 
         #       the last stage's latency refer to DynaPipe's Figure 10.
-        t_steady = num_microbatches * (
-            stage_latencies[-1][0] + stage_latencies[-1][1] + 
-            steady_last_stage_send_recv_latency
-        )
+        t_steady = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1]) + \
+            (num_microbatches - 1) * steady_last_stage_send_recv_latency
 
         # Phase 3. Drain
         # NOTE: Approximation: grad sync overhead remains nearly similar across stages

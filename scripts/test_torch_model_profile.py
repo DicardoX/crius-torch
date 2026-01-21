@@ -83,18 +83,16 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_one_torch_operator(self):
         """ Profile one torch operator in a hackable manner. """
 
-        # TODO(chunyu): Debug why there is a large gap between offline and megatron's online P2P overhead.
-
-        num_warmup_steps = 0
-        num_profile_steps = 1
-        use_pytorch_profiler = True
+        num_warmup_steps = 5
+        num_profile_steps = 100
+        use_pytorch_profiler = False
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
 
         torchrun_world_size = int(os.environ['WORLD_SIZE'])
         # Torch setup for distributed training
         local_rank = int(os.environ['LOCAL_RANK'])
-        device_id = torch.device(f'cuda:{local_rank}')
+        device = torch.device(f'cuda:{local_rank}')
         global_rank = int(os.environ['RANK'])
         torch.cuda.set_device(local_rank)
         torch.distributed.init_process_group(
@@ -103,6 +101,12 @@ class TorchModelProfileTest(unittest.TestCase):
             device_id=torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}"),
             backend="nccl",
         )
+
+        # P2P mapping
+        p2p_rank_mapping = {
+            0: 4, 1: 5, 2: 6, 3: 7,     # Node 0
+            4: 0, 5: 1, 6: 2, 7: 3,     # Node 1
+        }
 
         # comm_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
         # comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
@@ -134,26 +138,26 @@ class TorchModelProfileTest(unittest.TestCase):
         def __p2p_communication(p2p_type: str = "send_recv"):
             ops = []
             send_next_op, recv_next_op, send_prev_op, recv_prev_op = None, None, None, None
-            if global_rank == 0:
+            if global_rank in (0, 1, 2, 3):
                 if p2p_type in ("send_recv", "send"):
                     send_next_op = torch.distributed.P2POp(
-                        torch.distributed.isend, send_tensor, 1,
+                        torch.distributed.isend, send_tensor, p2p_rank_mapping[global_rank],
                     )
                 if p2p_type in ("send_recv", "recv"):
                     recv_next_op = torch.distributed.P2POp(
-                        torch.distributed.irecv, recv_tensor, 1,
+                        torch.distributed.irecv, recv_tensor, p2p_rank_mapping[global_rank],
                     )
                 ops.append(send_next_op)
                 ops.append(recv_next_op)
             
-            elif global_rank == 1:
+            elif global_rank in (4, 5, 6, 7):
                 if p2p_type in ("send_recv", "send"):
                     recv_prev_op = torch.distributed.P2POp(
-                        torch.distributed.irecv, recv_tensor, 0,
+                        torch.distributed.irecv, recv_tensor, p2p_rank_mapping[global_rank],
                     )
                 if p2p_type in ("send_recv", "recv"):
                     send_prev_op = torch.distributed.P2POp(
-                        torch.distributed.isend, send_tensor, 0,
+                        torch.distributed.isend, send_tensor, p2p_rank_mapping[global_rank],
                     )
                 ops.append(recv_prev_op)
                 ops.append(send_prev_op)
@@ -209,6 +213,8 @@ class TorchModelProfileTest(unittest.TestCase):
                     # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
                     # torch.distributed.all_reduce(comm_tensor)
                     __p2p_communication()
+            
+            torch.cuda.synchronize()    # batch_p2p_sync as in megatron
         
         end_event.record()
         end_event.synchronize()
@@ -218,7 +224,13 @@ class TorchModelProfileTest(unittest.TestCase):
             prof.export_chrome_trace('/app/torch_op_trace.json')
 
         op_latency = start_event.elapsed_time(end_event) / num_profile_steps
-        print(f"\n=======> Operator latency: {(op_latency):.3f} ms")
+        print(f"\n=======> (rank: {global_rank}) Operator latency: {(op_latency):.3f} ms")
+        
+        # Reduce across all ranks
+        latency_tensor = torch.tensor([op_latency, ], device=device, dtype=torch.float32)
+        torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.SUM)
+        op_latency = latency_tensor.item() / torchrun_world_size # Use the average latency across ranks.
+        print(f"Average operator latency across ranks: {(op_latency):.3f} ms")
 
     @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
@@ -273,12 +285,12 @@ class TorchModelProfileTest(unittest.TestCase):
                 8, 16, 32,
             ],
             comm_data_sizes = [
-                # 2**i for i in range(1,28)] + [
+                2**i for i in range(1,28)] + [
                 # 2**i for i in range(1,31)] + [
                 # Special volumes
                 # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
                 # 6647250944,
-                1871831040,
+                # 1871831040,
             ],
         )
         offline_profiler = CriusOfflineDataManager(
@@ -295,8 +307,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        offline_profiler.profile(opcode="all_reduce")
-        # offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="p2p")
 
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -359,9 +371,10 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_boundary_start_marker = ['input_layernorm', ]
         pipeline_boundary_end_marker = ['final_layernorm', ]
         # pipeline_forced_p2p_comm_overhead_ms = 10.0
-        pipeline_forced_p2p_comm_overhead_ms = -1.0
+        # pipeline_forced_p2p_comm_overhead_ms = -1.0
         forced_grad_sync_latency_scale_factor = 4.0     # Manually tuned
-        forced_p2p_latency_scale_factor = 1.0           # Manually tuned
+        # use_many_to_many_p2p_offline_data = False
+        # forced_p2p_latency_scale_factor = [0.95, 0.6]   # For send/recv and send_recv
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -372,10 +385,11 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,
             forced_grad_sync_latency_scale_factor=forced_grad_sync_latency_scale_factor,
-            forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
+            # use_many_to_many_p2p_offline_data=use_many_to_many_p2p_offline_data,
+            # forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
-            pipeline_forced_p2p_comm_overhead_ms=pipeline_forced_p2p_comm_overhead_ms,
+            # pipeline_forced_p2p_comm_overhead_ms=pipeline_forced_p2p_comm_overhead_ms,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,

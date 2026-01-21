@@ -857,7 +857,12 @@ class CriusOfflineDataManager:
         NOTE: In multi-node setups, must set `CUDA_VISIBLE_DEVICES` as `0` (for example) for each node.
         """
         rank = torch.distributed.get_rank()
-        send_tensor, recv_tensor = torch.randn(shapes[0], dtype=dtype).cuda(), torch.randn(shapes[0], dtype=dtype).cuda()
+        if not self.configs.use_torch_empty_to_init_weight:
+            send_tensor, recv_tensor = torch.randn(shapes[0], dtype=dtype).cuda(), \
+                torch.randn(shapes[0], dtype=dtype).cuda()
+        else:
+            send_tensor, recv_tensor = torch.empty(shapes[0], dtype=dtype).cuda(), \
+                torch.empty(shapes[0], dtype=dtype).cuda()
 
         def __exec():
             ops = []
@@ -907,9 +912,9 @@ class CriusOfflineDataManager:
         end_event.record()
         torch.cuda.synchronize()
 
-        op_latency = start_event.elapsed_time(end_event) / (num_profile_steps)   # Divide by 2 for send and recv
-        latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
-        torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.MAX)
-        op_latency = latency_tensor.item()    # Use the maximum latency across both ranks.
+        op_latency = start_event.elapsed_time(end_event) / (num_profile_steps)
+        # latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
+        # torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.MAX)
+        # op_latency = latency_tensor.item()    # Use the average latency across both ranks.
 
         return op_latency
