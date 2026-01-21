@@ -254,6 +254,13 @@ class TorchModelProfileTest(unittest.TestCase):
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
+            use_many_to_many_p2p_offline_data=True,
+            many_to_many_p2p_rank_mapping={
+                0: 4, 1: 5, 2: 6, 3: 7,     # Node 0
+                4: 0, 5: 1, 6: 2, 7: 3,     # Node 1
+            },
+            many_to_many_sender_ranks=[0, 1, 2, 3],
+            many_to_many_recver_ranks=[4, 5, 6, 7],
             gemm_left_op_hidden_dims=[      # Only consider forward ops
                 1024, 2048, 4096, 8192, 16384, 
             ],
@@ -285,7 +292,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 8, 16, 32,
             ],
             comm_data_sizes = [
-                2**i for i in range(1,28)] + [
+                2**i for i in range(1,27)] + [
                 # 2**i for i in range(1,31)] + [
                 # Special volumes
                 # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,

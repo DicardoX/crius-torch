@@ -75,6 +75,19 @@ class OfflineProfileConfigs:
     """ If True, run attention masking (i.e., masked_fill_) and softmax in fp32. This should 
     be True if apply_query_key_layer_scaling is True. """
 
+    use_many_to_many_p2p_offline_data: bool = True
+    """ Directly profile many-to-many P2P offline data rather than one-to-one P2P. See 
+    `ParallelismPlan.use_many_to_many_p2p_offline_data` for more details. """
+
+    many_to_many_p2p_rank_mapping: Dict[int, int] = None
+    """ Rank mapping for many-to-many P2P communication profiling. """
+
+    many_to_many_sender_ranks: List[int] = None
+    """ Sender ranks for many-to-many P2P communication profiling. """
+
+    many_to_many_recver_ranks: List[int] = None
+    """ Receiver ranks for many-to-many P2P communication profiling. """
+
     force_overwrite: bool = False
     """ Forcibly overwrite all profiled data and re-run. """
 
@@ -384,9 +397,9 @@ class CriusOfflineDataManager:
             args = (left_op, )
 
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
-            tensor = torch.randn(shapes[0], dtype=dtype).cuda() \
+            tensor = torch.randn(shapes[0], dtype=dtype, device=device) \
                 if not self.configs.use_torch_empty_to_init_weight else \
-                torch.empty(shapes[0], dtype=dtype).cuda()
+                torch.empty(shapes[0], dtype=dtype, deviec=device)
             if opcode == "all_reduce":
                 args = (tensor, torch.distributed.ReduceOp.SUM, )
         
@@ -789,7 +802,7 @@ class CriusOfflineDataManager:
             torch.distributed.barrier()
 
         world_size = int(os.environ["WORLD_SIZE"])
-        if opcode == "p2p":
+        if opcode == "p2p" and not self.configs.use_many_to_many_p2p_offline_data:
             assert world_size == 2, "P2P communication profiling requires exactly 2 processes."
         local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
         rank = int(os.environ["RANK"])
@@ -856,37 +869,46 @@ class CriusOfflineDataManager:
         
         NOTE: In multi-node setups, must set `CUDA_VISIBLE_DEVICES` as `0` (for example) for each node.
         """
+
         rank = torch.distributed.get_rank()
         if not self.configs.use_torch_empty_to_init_weight:
-            send_tensor, recv_tensor = torch.randn(shapes[0], dtype=dtype).cuda(), \
-                torch.randn(shapes[0], dtype=dtype).cuda()
+            send_tensor, recv_tensor = torch.randn(shapes[0], dtype=dtype, device=device), \
+                torch.randn(shapes[0], dtype=dtype, device=device)
         else:
-            send_tensor, recv_tensor = torch.empty(shapes[0], dtype=dtype).cuda(), \
-                torch.empty(shapes[0], dtype=dtype).cuda()
+            send_tensor, recv_tensor = torch.empty(shapes[0], dtype=dtype, device=device), \
+                torch.empty(shapes[0], dtype=dtype, device=device)
+        
+        many_to_many_p2p_rank_mapping = {0: 1, 1: 0}
+        sender_ranks, recver_ranks = [0, ], [1, ]
+        if self.configs.use_many_to_many_p2p_offline_data:
+            many_to_many_p2p_rank_mapping = self.configs.many_to_many_p2p_rank_mapping
+            sender_ranks = self.configs.many_to_many_sender_ranks
+            recver_ranks = self.configs.many_to_many_recver_ranks
 
         def __exec():
             ops = []
             send_next_op, recv_next_op, send_prev_op, recv_prev_op = None, None, None, None
-            if rank == 0:
+            dst_rank = many_to_many_p2p_rank_mapping[rank]
+            if rank in sender_ranks:
                 if p2p_type in ("send_recv", "send"):
                     send_next_op = torch.distributed.P2POp(
-                        torch.distributed.isend, send_tensor, 1,
+                        torch.distributed.isend, send_tensor, dst_rank,
                     )
                 if p2p_type in ("send_recv", "recv"):
                     recv_next_op = torch.distributed.P2POp(
-                        torch.distributed.irecv, recv_tensor, 1,
+                        torch.distributed.irecv, recv_tensor, dst_rank,
                     )
                 ops.append(send_next_op)
                 ops.append(recv_next_op)
             
-            elif rank == 1:
+            elif rank in recver_ranks:
                 if p2p_type in ("send_recv", "send"):
                     recv_prev_op = torch.distributed.P2POp(
-                        torch.distributed.irecv, recv_tensor, 0,
+                        torch.distributed.irecv, recv_tensor, dst_rank,
                     )
                 if p2p_type in ("send_recv", "recv"):
                     send_prev_op = torch.distributed.P2POp(
-                        torch.distributed.isend, send_tensor, 0,
+                        torch.distributed.isend, send_tensor, dst_rank,
                     )
                 ops.append(recv_prev_op)
                 ops.append(send_prev_op)
@@ -909,12 +931,14 @@ class CriusOfflineDataManager:
         start_event.record()
         for _ in range(num_profile_steps):
             __exec()
+            torch.cuda.synchronize()    # batch_p2p_sync as in megatron
+
         end_event.record()
         torch.cuda.synchronize()
 
         op_latency = start_event.elapsed_time(end_event) / (num_profile_steps)
-        # latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
-        # torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.MAX)
-        # op_latency = latency_tensor.item()    # Use the average latency across both ranks.
+        latency_tensor = torch.tensor([op_latency, ], device=device, dtype=dtype)
+        torch.distributed.all_reduce(latency_tensor, op=torch.distributed.ReduceOp.SUM)
+        op_latency = latency_tensor.item() / int(os.environ['WORLD_SIZE'])  # Average latency
 
         return op_latency
