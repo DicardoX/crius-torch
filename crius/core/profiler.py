@@ -287,6 +287,8 @@ class CriusDistProfiler:
                 num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
             return (parallelism_plan.data_parallel_degree, num_comm_nodes)
         elif parallelism == "pp":
+            if parallelism_plan.use_many_to_many_p2p_offline_data and global_configs.num_nodes > 1:
+                return (2 * global_configs.num_devices_per_node, 2)
             return (2, 1) if global_configs.num_nodes == 1 else (2, 2)
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")

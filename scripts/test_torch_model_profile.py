@@ -340,9 +340,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 2048
+        num_micro_batches = 8
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -392,7 +392,7 @@ class TorchModelProfileTest(unittest.TestCase):
             tensor_parallel_degree=global_configs.tensor_model_parallel_size,
             data_parallel_degree=global_configs.data_parallel_size,
             forced_grad_sync_latency_scale_factor=forced_grad_sync_latency_scale_factor,
-            # use_many_to_many_p2p_offline_data=use_many_to_many_p2p_offline_data,
+            use_many_to_many_p2p_offline_data=True,
             # forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
