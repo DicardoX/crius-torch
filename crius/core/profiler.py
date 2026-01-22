@@ -361,6 +361,9 @@ class CriusDistProfiler:
 
         # FIXME(chunyu): Seems that the grad sync communication size is not totally matched with the ground truth.
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "dp")
+        
+        # TODO(chunyu): Add many-to-many all-reduce option when determining group size and num nodes for grad-sync modeling.
+        
         # nbytes_per_numel = dtype_to_bytes[params_dtype]
         grad_sync_comm_sizes = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]

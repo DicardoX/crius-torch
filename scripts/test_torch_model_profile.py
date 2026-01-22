@@ -83,8 +83,8 @@ class TorchModelProfileTest(unittest.TestCase):
     def test_one_torch_operator(self):
         """ Profile one torch operator in a hackable manner. """
 
-        num_warmup_steps = 5
-        num_profile_steps = 100
+        num_warmup_steps = 0
+        num_profile_steps = 3
         use_pytorch_profiler = False
         use_torch_empty_to_init_weight = True
         use_transposed_weight = True
@@ -109,7 +109,7 @@ class TorchModelProfileTest(unittest.TestCase):
         }
 
         # comm_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
-        # comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
+        comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
         # comm_tensor = torch.empty((1219321856,), device=torch.cuda.current_device(), dtype=torch.float16)
         send_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
         recv_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
@@ -172,14 +172,14 @@ class TorchModelProfileTest(unittest.TestCase):
                 # _ = torch.matmul(left_op, right_op.t())
                 # input_op.masked_fill_(mask, value)
                 # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                # torch.distributed.all_reduce(comm_tensor)
-                __p2p_communication()
+                torch.distributed.all_reduce(comm_tensor)
+                # __p2p_communication()
             else:
                 # _ = torch.matmul(left_op, right_op)
                 # input_op.masked_fill_(mask, value)
                 # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                # torch.distributed.all_reduce(comm_tensor)
-                __p2p_communication()
+                torch.distributed.all_reduce(comm_tensor)
+                # __p2p_communication()
         torch.cuda.synchronize()
         
         if use_pytorch_profiler:
@@ -204,15 +204,15 @@ class TorchModelProfileTest(unittest.TestCase):
                 # input_op.masked_fill_(mask, value)
                 with torch.no_grad():
                     # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                    # torch.distributed.all_reduce(comm_tensor)
-                    __p2p_communication()
+                    torch.distributed.all_reduce(comm_tensor)
+                    # __p2p_communication()
             else:
                 # _ = torch.matmul(left_op, right_op)
                 # input_op.masked_fill_(mask, value)
                 with torch.no_grad():
                     # _ = torch.baddbmm(left_op, mid_op, right_op, beta=0.0, alpha=0.01,)
-                    # torch.distributed.all_reduce(comm_tensor)
-                    __p2p_communication()
+                    torch.distributed.all_reduce(comm_tensor)
+                    # __p2p_communication()
             
             torch.cuda.synchronize()    # batch_p2p_sync as in megatron
         
@@ -232,7 +232,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = latency_tensor.item() / torchrun_world_size # Use the average latency across ranks.
         print(f"Average operator latency across ranks: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -292,12 +292,12 @@ class TorchModelProfileTest(unittest.TestCase):
                 8, 16, 32,
             ],
             comm_data_sizes = [
-                2**i for i in range(1,27)] + [
-                # 2**i for i in range(1,31)] + [
+                # 2**i for i in range(1,27)] + [
+                2**i for i in range(1,31)] + [
                 # Special volumes
                 # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
                 # 6647250944,
-                # 1871831040,
+                1871831040,
             ],
         )
         offline_profiler = CriusOfflineDataManager(
@@ -314,8 +314,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        # offline_profiler.profile(opcode="all_reduce")
-        offline_profiler.profile(opcode="p2p")
+        offline_profiler.profile(opcode="all_reduce")
+        # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -340,9 +340,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
-        seq_len = 2048
-        num_micro_batches = 8
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -355,8 +355,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_devices_per_node = 4
 
         global_configs.tensor_model_parallel_size = 4
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -504,7 +504,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -536,25 +536,25 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 16
+        global_bs = 8
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 16
+        num_layers = 32
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 3
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
 
-        global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 2
+        global_configs.num_nodes = 2
+        global_configs.num_devices_per_node = 4
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
         max_mfu_test = False
@@ -667,8 +667,8 @@ class TorchModelProfileTest(unittest.TestCase):
             pipeline_strategy="1f1b",
             forward_only=False,
             use_pytorch_profiler=True,
-            pytorch_profiler_dp_ranks=[0,], 
-            pytorch_profiler_tp_ranks=[0, 1,],
+            pytorch_profiler_dp_ranks=[0, ], 
+            pytorch_profiler_tp_ranks=[0, ],
         )
         trainer.train(metric_types=["e2e_iter_time", "mfu", ])
 

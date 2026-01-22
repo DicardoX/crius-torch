@@ -75,6 +75,7 @@ class OfflineProfileConfigs:
     """ If True, run attention masking (i.e., masked_fill_) and softmax in fp32. This should 
     be True if apply_query_key_layer_scaling is True. """
 
+    # Pipeline
     use_many_to_many_p2p_offline_data: bool = True
     """ Directly profile many-to-many P2P offline data rather than one-to-one P2P. See 
     `ParallelismPlan.use_many_to_many_p2p_offline_data` for more details. """
@@ -88,6 +89,7 @@ class OfflineProfileConfigs:
     many_to_many_recver_ranks: List[int] = None
     """ Receiver ranks for many-to-many P2P communication profiling. """
 
+    # Others
     force_overwrite: bool = False
     """ Forcibly overwrite all profiled data and re-run. """
 
