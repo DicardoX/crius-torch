@@ -274,6 +274,13 @@ class CriusDistProfiler:
             num_comm_nodes = int(np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node))
             return (parallelism_plan.tensor_parallel_degree, num_comm_nodes)
         elif parallelism == "dp":
+            if parallelism_plan.use_many_to_many_all_reduce_dp_bw_offline_data:
+                # Those TP ranks that share the same part of model parameters constitute the same DP group, 
+                # in which the gradient synchronization is performed.
+                group_size = parallelism_plan.data_parallel_degree
+                num_comm_nodes = parallelism_plan.data_parallel_degree
+                return (group_size, num_comm_nodes)
+            
             if parallelism_plan.use_global_grad_sync_dp_backward:
                 # Perform gradient synchronization across all GPUs, even in hybrid parallelism
                 group_size = global_configs.num_devices_per_node * global_configs.num_nodes
@@ -361,9 +368,6 @@ class CriusDistProfiler:
 
         # FIXME(chunyu): Seems that the grad sync communication size is not totally matched with the ground truth.
         comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "dp")
-        
-        # TODO(chunyu): Add many-to-many all-reduce option when determining group size and num nodes for grad-sync modeling.
-        
         # nbytes_per_numel = dtype_to_bytes[params_dtype]
         grad_sync_comm_sizes = [0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
         grad_sync_latencies = [0.0 for _ in range(parallelism_plan.pipeline_parallel_degree)]
@@ -394,7 +398,12 @@ class CriusDistProfiler:
                 #                     f"in profiled data for grad sync estimation.")
                 # logger.warning(f"Query key {query_key} not found in profiled data for grad sync estimation, " + 
                 #                 f"using default latency {node_grad_sync_latency}ms.")
-            grad_sync_latencies[i] = grad_sync_latency * parallelism_plan.forced_grad_sync_latency_scale_factor
+            
+            if parallelism_plan.use_many_to_many_all_reduce_dp_bw_offline_data:
+                # Each DP group performs a gradient synchronization individually
+                grad_sync_latencies[i] = grad_sync_latency * parallelism_plan.tensor_parallel_degree
+            else:
+                grad_sync_latencies[i] = grad_sync_latency * parallelism_plan.forced_grad_sync_latency_scale_factor
 
         return grad_sync_latencies
 

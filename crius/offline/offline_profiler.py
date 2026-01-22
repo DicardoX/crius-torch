@@ -401,7 +401,7 @@ class CriusOfflineDataManager:
         elif opcode in ("all_reduce", "all_gather", "all_to_all", "reduce_scatter",):
             tensor = torch.randn(shapes[0], dtype=dtype, device=device) \
                 if not self.configs.use_torch_empty_to_init_weight else \
-                torch.empty(shapes[0], dtype=dtype, deviec=device)
+                torch.empty(shapes[0], dtype=dtype, device=device)
             if opcode == "all_reduce":
                 args = (tensor, torch.distributed.ReduceOp.SUM, )
         

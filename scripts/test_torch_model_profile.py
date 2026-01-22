@@ -232,7 +232,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = latency_tensor.item() / torchrun_world_size # Use the average latency across ranks.
         print(f"Average operator latency across ranks: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -317,7 +317,7 @@ class TorchModelProfileTest(unittest.TestCase):
         offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -340,9 +340,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 2048
+        num_micro_batches = 8
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -393,6 +393,7 @@ class TorchModelProfileTest(unittest.TestCase):
             data_parallel_degree=global_configs.data_parallel_size,
             forced_grad_sync_latency_scale_factor=forced_grad_sync_latency_scale_factor,
             use_many_to_many_p2p_offline_data=True,
+            use_many_to_many_all_reduce_dp_bw_offline_data=True,
             # forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
@@ -536,16 +537,16 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 2
+        global_bs = 16
+        seq_len = 2048
+        num_micro_batches = 8
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 3
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 4

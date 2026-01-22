@@ -61,6 +61,15 @@ class ParallelismPlan:
     """ Use many-to-many P2P offline profiled data for P2P communication latency estimation during pipeline execution. 
     If False, one-to-one P2P offline profiled data will be used with a scale factor. """
 
+    use_many_to_many_all_reduce_dp_bw_offline_data: bool = False
+    """ Use many-to-many all-reduce offline profiled data, mainly for gradient synchronization in DP backward pass.
+    That is, in Megatron, those TP ranks (or other parallelism types) that share the same part of model parameters 
+    constitute a DP group, in which the gradient sychronization is performed. 
+    
+    Currently, during offline profiling, we independently profile the all-reduce of a single DP group, and multiply
+    the number of DP groups in gradient synchronization modeling.
+    """
+
     forced_p2p_latency_scale_factor: Union[float, List[float]] = 1.0
     """ Scale factor for the estimated P2P communication latency during pipeline execution. 
     Used (and to be tuned) when P2P data is profiled using one-to-one ranks (then multiplied with #PP groups), rather 
