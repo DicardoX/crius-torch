@@ -7,6 +7,7 @@ from crius.model_parallel import *
 from crius.offline import *
 from crius.compile import *
 from crius.train_backend import *
+from crius.tools import *
 from crius._advanced import *
 
 from crius.global_envs import *
