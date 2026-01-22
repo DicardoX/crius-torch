@@ -537,22 +537,26 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 8
+        global_bs = 16
         seq_len = 1024
-        num_micro_batches = 2
+        num_micro_batches = 1
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 2
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 4
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
+
+        global_configs.num_nodes = 1
+        global_configs.num_devices_per_node = 1
+        global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
         # Get number of microbatches
         # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
@@ -585,6 +589,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # NOTE: We monkey patch all input configuratons into `megatron_config`, 
         # instead of explicitly pass-in into the arguments of `Trainer()`.
         setattr(megatron_config, "global_batch_size", global_bs)
+        setattr(megatron_config, "vocab_size", vocab_size)
         setattr(megatron_config, "num_micro_batches", num_micro_batches)
         setattr(megatron_config, "sequence_length", seq_len)
         setattr(megatron_config, "num_iters", num_iters)
@@ -654,7 +659,7 @@ class TorchModelProfileTest(unittest.TestCase):
             pytorch_profiler_dp_ranks=[0,], 
             pytorch_profiler_tp_ranks=[0, 1,],
         )
-        trainer.train()
+        trainer.train(metric_types=["e2e_iter_time", "mfu", ])
 
     @unittest.skip("Pass.")
     def test_meagtron_ground_truth_moe(self):

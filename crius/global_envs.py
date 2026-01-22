@@ -51,6 +51,9 @@ class GlobalEnvConfigs:
     per_device_memory_capacity_in_gb: float = 10.0
     """ Memory capacity (in GB) of the target compute device. """
 
+    peak_fp16_tflops: float = 149.7
+    """ Peak FP16 TFLOPS of the target compute device. """
+
     current_device: torch.device = torch.device("cpu")
     """ Current compute device of this rank, used for tensor instantiation in internal NN modules to replace 
     `torch.cuda.current_device()`. """

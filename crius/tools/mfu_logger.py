@@ -7,6 +7,8 @@
 from typing import Union, List, Optional
 from dataclasses import dataclass
 
+from crius.global_envs import global_configs, logger
+
 __all__ = [
     "MFULoggerModelConfig",
     "MFULogger",
@@ -139,7 +141,7 @@ class MFULogger:
             num_experts_routed_to = self.config.moe_router_topk
             last_layer_is_moe = moe_layer_pattern[-1]
         
-        if mtp_num_layers is None:
+        if self.config.mtp_num_layers is None:
             mtp_num_layers = 0
             num_layers = self.config.num_layers
         else:
@@ -258,7 +260,7 @@ class MFULogger:
         if throughput_metric is None:
             assert e2e_latency_metric is not None, \
                 "Should specify at least one argument for throughput or latency."
-            token_thr = (batch_size * sequence_length) / e2e_latency_metric
+            token_thr = (batch_size * sequence_length) / (e2e_latency_metric / 1e3)     # in ms
         elif not is_token_thr:
             token_thr = throughput_metric * sequence_length
         else:
@@ -267,6 +269,9 @@ class MFULogger:
         model_flops = self.num_transformer_floating_point_operations(batch_size, sequence_length)
         flops_per_token = model_flops / (batch_size * sequence_length)
         train_tflops = (flops_per_token * token_thr) / 1e12
+        logger.info(f"Model FLOPs per token: {flops_per_token} | Training TFLOPS: {train_tflops}")
 
-        print(train_tflops)
-        exit(0)
+        max_tflops = global_configs.peak_fp16_tflops * (
+            global_configs.num_nodes * global_configs.num_devices_per_node
+        )
+        return (train_tflops / max_tflops)

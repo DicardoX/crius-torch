@@ -110,7 +110,7 @@ class Trainer:
                 num_layers=self.megatron_config.num_layers,
                 num_attention_heads=self.megatron_config.num_attention_heads,
                 hidden_size=self.megatron_config.hidden_size,
-                padded_vocab_size=self.model.vocab_size,
+                padded_vocab_size=self.megatron_config.vocab_size,
             )
         )
 
