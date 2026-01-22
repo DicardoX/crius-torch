@@ -75,7 +75,8 @@ def initialize_virtual_distributed(
 
 
 def initialize_distributed(
-    tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1,
+    tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1, 
+    virtual_pipeline_model_parallel_size: int = 1,
 ):
     """ Initialize the Megatron backend. 
     
@@ -95,7 +96,9 @@ def initialize_distributed(
     torch.distributed.init_process_group(world_size=torchrun_world_size, rank=global_rank, backend="nccl")
 
     # Megatron core distributed training initialization
-    parallel_state.initialize_model_parallel(tensor_model_parallel_size, pipeline_model_parallel_size)    
+    parallel_state.initialize_model_parallel(
+        tensor_model_parallel_size, pipeline_model_parallel_size, virtual_pipeline_model_parallel_size,
+    )    
     logger.info(f"=========> Megatron distributed training initialized with rank {global_rank} and world size {torchrun_world_size}.")
 
 

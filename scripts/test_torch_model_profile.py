@@ -528,8 +528,7 @@ class TorchModelProfileTest(unittest.TestCase):
                                                                  get_optimizer_and_scheduler, get_input_batch)
 
         def model_provider(
-            hidden_size: int, num_layers: int, max_seq_len: int, vocab_size: int, device: str, dtype: str, 
-            megatron_config: Any = None, use_toy: bool = False,
+            megatron_config: Any, max_seq_len: int, vocab_size: int, device: str,
         ) -> nn.Module:
             """ Model provider function. """
             pre_process = mpu.is_pipeline_first_stage()
@@ -539,10 +538,10 @@ class TorchModelProfileTest(unittest.TestCase):
         model_type = ModelType.GPT
         global_bs = 16
         seq_len = 1024
-        num_micro_batches = 1
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 2
+        num_layers = 16
         dtype = torch.float16
         device = "cuda"
         vocab_size = 50000
@@ -550,14 +549,24 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 1
+        global_configs.num_devices_per_node = 2
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
+        max_mfu_test = False
+        virtual_pipeline_model_parallel_size = None
+        overlap_p2p_comm = False
+        batch_p2p_sync = True
+        if max_mfu_test:
+            virtual_pipeline_model_parallel_size = 1    # Number of layers per virtual stage
+            overlap_p2p_comm = True
+            batch_p2p_sync = False
+            raise NotImplementedError("Virtual pipeline is not implemented in ground truth.")
+        
         # Get number of microbatches
         # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
         # only changing the number of micro-batches to maintain constant global batch size.
@@ -572,20 +581,25 @@ class TorchModelProfileTest(unittest.TestCase):
         initialize_distributed(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
         )
         model_parallel_cuda_manual_seed(1234)
 
-        # Create TransformerConfig for Megatron
+        # Create TransformerConfig for Megatron   
         megatron_config = TransformerConfig(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
             num_layers=num_layers,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
             params_dtype=dtype,
             pipeline_dtype=dtype,
             fp16=(dtype == torch.float16),
+            overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_sync=batch_p2p_sync,
         )
+
         # NOTE: We monkey patch all input configuratons into `megatron_config`, 
         # instead of explicitly pass-in into the arguments of `Trainer()`.
         setattr(megatron_config, "global_batch_size", global_bs)
@@ -597,13 +611,10 @@ class TorchModelProfileTest(unittest.TestCase):
 
         # Model
         model_kwargs={
-            "hidden_size": hidden_size,
-            "num_layers": num_layers,
+            "megatron_config": megatron_config,
             "max_seq_len": seq_len,
             "vocab_size": vocab_size,
             "device": device,
-            "dtype": dtype,
-            "megatron_config": megatron_config,
         }
         model = model_provider(**model_kwargs) if model_provider else None
         model = setup_model(model)
@@ -618,7 +629,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # Definition of forward step function
         def __forward_step_func(data_iterator, model):
             """ Vanilla forward step function. """
-   
+
             def __loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
                 """ Loss function definition. """
                 losses = output_tensor.float()
