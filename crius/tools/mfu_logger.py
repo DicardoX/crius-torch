@@ -17,7 +17,7 @@ __all__ = [
 class MFULoggerModelConfig:
     """ Model configuration class for MFU Logger. 
     
-    This class behaves as a subset of Megatron's TransformerConfig.
+    This class behaves as a (super-)subset of Megatron's TransformerConfig.
     """
 
     num_layers: int = None
@@ -27,18 +27,22 @@ class MFULoggerModelConfig:
     """ Number of attention heads. """
 
     hidden_size:int = None
-    """Transformer hidden size."""
+    """ Transformer hidden size. """
 
     num_query_groups: Optional[int] = None
-    """Number of query groups for group query attention. If None, normal attention is used."""
+    """ Number of query groups for group query attention. If None, normal attention is used. """
 
     ffn_hidden_size: Optional[int] = None
     """ Transformer Feed-Forward Network hidden size. This is set to 4*hidden_size
     if not provided. """
 
     kv_channels: Optional[int] = None
-    """Projection weights dimension in multi-head attention. This is set to hidden_size //
-    num_attention_heads if not provided."""
+    """ Projection weights dimension in multi-head attention. This is set to hidden_size //
+    num_attention_heads if not provided. """
+
+    padded_vocab_size: int = None
+    """ The final padded vocab size (Padded to make it divisible by 
+    --make-vocab-size-divisible-by value). """
 
     ###############
     # MoE-related #
@@ -189,5 +193,80 @@ class MFULogger:
             )
         )
 
-        raise NotImplementedError
+        # NOTE: No linear attention enabled
+        num_linear_attention_layers = 0
+        linear_self_attn_term = 0
+        num_standard_attention_layers = num_layers
+
+        self_attn_term = (
+            linear_self_attn_term * num_linear_attention_layers
+            + standard_self_attn_term * num_standard_attention_layers
+        )
+
+        total_floating_point_operations = (
+            batch_size
+            * sequence_length
+            * (
+                # MLP
+                forward_backward_expansion_factor
+                * fma_expansion_factor
+                * self.config.hidden_size
+                * (
+                    # dense layer (deepseek v2, v3 style)
+                    (self.config.ffn_hidden_size * ffn_expansion_factor)
+                    * num_dense_layers
+                    # routed experts
+                    + (moe_ffn_hidden_size * num_experts_routed_to * ffn_expansion_factor)
+                    * num_moe_layers
+                    # Shared Experts.
+                    + (shared_expert_ffn_hidden_size * ffn_expansion_factor)
+                    * num_moe_layers
+                )
+                # Self Attention
+                + self_attn_term
+                # MTP norms and proj
+                + forward_backward_expansion_factor
+                * fma_expansion_factor
+                * mtp_num_layers
+                * (
+                    # MTP eh norm + final nrom
+                    3 * self.config.hidden_size
+                    # MTH eh proj
+                    + 2 * self.config.hidden_size * self.config.hidden_size
+                )
+                # Logit.
+                + forward_backward_expansion_factor
+                * fma_expansion_factor
+                * self.config.hidden_size
+                * self.config.padded_vocab_size
+                * (mtp_num_layers + 1)  # MTP + final logit
+            )
+        )
+
+        return total_floating_point_operations
+
+    def get_mfu_metric(
+        self, batch_size: int, sequence_length: int, throughput_metric: float = None, 
+        e2e_latency_metric: float = None, is_token_thr: bool = False,
+    ) -> float:
+        """ Calculate MFU metric. 
         
+        Args:
+            is_token_thr: Whether the `throughput` is token-level. If False, default to sample-level. 
+        """
+
+        if throughput_metric is None:
+            assert e2e_latency_metric is not None, \
+                "Should specify at least one argument for throughput or latency."
+            token_thr = (batch_size * sequence_length) / e2e_latency_metric
+        elif not is_token_thr:
+            token_thr = throughput_metric * sequence_length
+        else:
+            token_thr = throughput_metric
+        
+        model_flops = self.num_transformer_floating_point_operations(batch_size, sequence_length)
+        flops_per_token = model_flops / (batch_size * sequence_length)
+        train_tflops = (flops_per_token * token_thr) / 1e12
+
+        print(train_tflops)
+        exit(0)

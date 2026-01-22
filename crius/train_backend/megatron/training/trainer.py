@@ -31,6 +31,7 @@ from megatron.core.distributed import (
     DistributedDataParallel, DistributedDataParallelConfig)
 from megatron.core.utils import get_attr_wrapped_model
 
+from crius.tools.mfu_logger import (MFULogger, MFULoggerModelConfig)
 from crius.global_envs import logger
 from crius.train_backend.megatron.training.utils import log_on_rank, Timer
 
@@ -104,6 +105,15 @@ class Trainer:
         self.forward_backward_func = None
         self.timer = Timer()
 
+        self.mfu_logger = MFULogger(
+            MFULoggerModelConfig(
+                num_layers=self.megatron_config.num_layers,
+                num_attention_heads=self.megatron_config.num_attention_heads,
+                hidden_size=self.megatron_config.hidden_size,
+                padded_vocab_size=self.model.vocab_size,
+            )
+        )
+
         self._init_forward_backward_func()
 
     def _init_forward_backward_func(self) -> None:
@@ -169,7 +179,7 @@ class Trainer:
         torch.distributed.barrier()
         return (tr_loss, ) if last_stage else (None, )
 
-    def train(self, report_metrics: bool = True) -> List[float]:
+    def train(self, metric_types: List[str] = []) -> List[float]:
         """ Training entrypoint. """
         
         # Turn on training mode which enables dropout
@@ -222,17 +232,33 @@ class Trainer:
                 log_level="info",
             )
 
-        if report_metrics:
+        if len(metric_types) > 0:
             raw_record = self.timer._records.pop("train_step")
             e2e_iter_times = [round(_r.elapsed, 3) for _r in raw_record]
             e2e_iter_times = e2e_iter_times[1:]     # Warmup iter excluded
-            log_on_rank(
-                msg=f"Average end-to-end iteration time (ms): {np.mean(e2e_iter_times)}",
-                rank=[0, 0],
-                group_type=["tensor", "pipeline"],
-                logger=logger,
-                log_level="info",
-            )
+            
+            if "e2e_iter_time" in metric_types:
+                log_on_rank(
+                    msg=f"Average end-to-end iteration time (ms): {np.mean(e2e_iter_times)}",
+                    rank=[0, 0],
+                    group_type=["tensor", "pipeline"],
+                    logger=logger,
+                    log_level="info",
+                )
+            
+            if "mfu" in metric_types:
+                mfu = self.mfu_logger.get_mfu_metric(
+                    self.megatron_config.global_batch_size,
+                    self.megatron_config.sequence_length,
+                    e2e_latency_metric=np.mean(e2e_iter_times),
+                )
+                log_on_rank(
+                    msg=f"Average training MFU: {mfu}",
+                    rank=[0, 0],
+                    group_type=["tensor", "pipeline"],
+                    logger=logger,
+                    log_level="info",
+                )
 
         return tr_losses
 
