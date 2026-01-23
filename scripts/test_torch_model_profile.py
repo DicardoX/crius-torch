@@ -250,7 +250,7 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=True,
+            force_overwrite=False,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
@@ -262,34 +262,34 @@ class TorchModelProfileTest(unittest.TestCase):
             many_to_many_sender_ranks=[0, 1, 2, 3],
             many_to_many_recver_ranks=[4, 5, 6, 7],
             gemm_left_op_hidden_dims=[      # Only consider forward ops
-                1024, 2048, 4096, 8192, 16384, 
+                256, 512, 1024, 2048, 4096, 8192, 16384, 
             ],
             gemm_right_op_hidden_dims=[
-                1024, 2048, 4096, 3072, 6144, 12288, 8192, 16384, 12500, 25000, 50000, 
+                256, 512, 1024, 2048, 4096, 1536, 3072, 6144, 12288, 8192, 16384, 6250, 12500, 25000, 50000, 
             ],
             bmm_op_hidden_dims=[
-                1024, 2048, 4096, 8192,
+                256, 512, 1024, 2048, 4096, 8192,
             ],
             baddbmm_op_hidden_dims=[
-                1024, 2048, 4096, 8192,
+                256, 512, 1024, 2048, 4096, 8192,
             ],
             num_attn_heads_per_rank=[
-                8, 16, 32,
+                2, 4, 8, 16, 32,
             ],
             layernorm_op_hidden_dims=[
-                1024, 2048, 4096, 8192,
+                256, 512, 1024, 2048, 4096, 8192,
             ],
             dropout_op_hidden_dims=[
-                1024, 2048, 4096, 8192,
+                256, 512, 1024, 2048, 4096, 8192,
             ],
             dropout_op_num_attn_heads=[
-                8, 16, 32,
+                2, 4, 8, 16, 32,
             ],
             masked_fill_op_num_attn_heads=[
-                8, 16, 32,
+                2, 4, 8, 16, 32,
             ],
             softmax_op_num_attn_heads=[
-                8, 16, 32,
+                2, 4, 8, 16, 32,
             ],
             comm_data_sizes = [
                 # 2**i for i in range(1,27)] + [
@@ -340,9 +340,9 @@ class TorchModelProfileTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
-        seq_len = 2048
-        num_micro_batches = 8
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -354,9 +354,9 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_nodes = 2
         global_configs.num_devices_per_node = 4
 
-        global_configs.tensor_model_parallel_size = 4
+        global_configs.tensor_model_parallel_size = 2
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.data_parallel_size = 4
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -537,9 +537,9 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 16
-        seq_len = 2048
-        num_micro_batches = 8
+        global_bs = 8
+        seq_len = 1024
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -549,9 +549,9 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 4
+        global_configs.tensor_model_parallel_size = 2
         global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 2
+        global_configs.data_parallel_size = 4
         global_configs.only_forward = False
 
         global_configs.num_nodes = 2
@@ -667,7 +667,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )

@@ -269,6 +269,14 @@ class CriusDistProfiler:
     ) -> Tuple[int, int]:
         """ Get the communication group size and number of GPU nodes. """
 
+        # In Megatron, the rank mapping is [TP] -> [DP] -> [PP].
+        # For example, assume ther are 2 nodes (node 0: rank 0-7, node 1: rank 8-15).
+        # If he TP-DP-PP parallelism is 4-2-2, then the rank mapping is:
+        # - TP groups x 4: [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15]
+        # - DP groups x 8: [0, 4], [1, 5], [2, 6], [3, 7], [8, 12], [9, 13], [10, 14], [11, 15]
+        # - PP groups x 8: [0, 8], [1, 9], [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15] 
+        # See: https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/parallel_state.py#L272
+        
         parallelism = node.node_parallelism if forced_parallelism is None else forced_parallelism
         if parallelism == "tp":
             num_comm_nodes = int(np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node))
@@ -278,21 +286,18 @@ class CriusDistProfiler:
                 # Those TP ranks that share the same part of model parameters constitute the same DP group, 
                 # in which the gradient synchronization is performed.
                 group_size = parallelism_plan.data_parallel_degree
-                num_comm_nodes = parallelism_plan.data_parallel_degree
+                num_comm_nodes = parallelism_plan.data_parallel_degree // \
+                    max(1, global_configs.num_devices_per_node // parallelism_plan.tensor_parallel_degree)
                 return (group_size, num_comm_nodes)
             
-            if parallelism_plan.use_global_grad_sync_dp_backward:
-                # Perform gradient synchronization across all GPUs, even in hybrid parallelism
+            else:
+                # Perform gradient synchronization across all GPUs
+                logger.warning(f"This method should be deprecated and only reserved in case that you have no " + 
+                               f"many-to-many all-reduce offline data.")
                 group_size = global_configs.num_devices_per_node * global_configs.num_nodes
                 num_comm_nodes = global_configs.num_nodes
                 return (group_size, num_comm_nodes)
-            else:
-                # Only across DP replicas
-                num_dp_ranks_per_node = int(np.ceil(global_configs.num_devices_per_node / (
-                    parallelism_plan.pipeline_parallel_degree * parallelism_plan.tensor_parallel_degree)
-                ))
-                num_comm_nodes = int(np.ceil(global_configs.num_nodes / num_dp_ranks_per_node))
-            return (parallelism_plan.data_parallel_degree, num_comm_nodes)
+
         elif parallelism == "pp":
             if parallelism_plan.use_many_to_many_p2p_offline_data and global_configs.num_nodes > 1:
                 return (2 * global_configs.num_devices_per_node, 2)

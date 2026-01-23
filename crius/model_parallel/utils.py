@@ -48,10 +48,6 @@ class ParallelismPlan:
     assuming 16 microbatches and DP=2, each DP replica executes 8 microbatches and the total number of microbatches
     for the per-DP pipeline becomes 8. """
 
-    use_global_grad_sync_dp_backward: bool = True
-    """ When DP degree < #GPUs (i.e., in hybrid parallelism), performing gradient synchronization across all GPUs, 
-    rather than only across DP replicas. """
-
     forced_grad_sync_latency_scale_factor: float = 1.0
     """ Scale factor for the estimated gradient synchronization latency across all GPUs during backward pass.
     Used (and to be tuned) when in multi-node setting, because we find that the cross-node grad sync overhead of DDP
