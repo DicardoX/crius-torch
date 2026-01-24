@@ -287,8 +287,12 @@ class CriusDistProfiler:
                 # Those TP ranks that share the same part of model parameters constitute the same DP group, 
                 # in which the gradient synchronization is performed.
                 group_size = parallelism_plan.data_parallel_degree
+                num_pp_groups_per_node = max(1, parallelism_plan.pipeline_parallel_degree // global_configs.num_nodes)
                 num_comm_nodes = parallelism_plan.data_parallel_degree // \
-                    max(1, global_configs.num_devices_per_node // parallelism_plan.tensor_parallel_degree)
+                    max(1, 
+                        global_configs.num_devices_per_node // 
+                        (parallelism_plan.tensor_parallel_degree * num_pp_groups_per_node)
+                    )
                 return (group_size, num_comm_nodes)
             
             else:
@@ -546,7 +550,7 @@ class CriusDistProfiler:
 
         # Warmup phase
         warmup_latency = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])
-        warmup_latency += np.sum(p2p_latencies[i][0] for i in range(num_stages - 1))
+        warmup_latency += np.sum([p2p_latencies[i][0] for i in range(num_stages - 1)])
 
         # Steady phase
         if homo_p2p_latency:
@@ -572,6 +576,6 @@ class CriusDistProfiler:
         
         # Drain phase
         drain_latency = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)]) + np.max(grad_sync_latencies)
-        drain_latency += np.sum(p2p_latencies[i][1] for i in range(num_stages - 1))
+        drain_latency += np.sum([p2p_latencies[i][1] for i in range(num_stages - 1)])
 
         return (warmup_latency + steady_latency + drain_latency)

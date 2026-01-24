@@ -319,7 +319,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="all_reduce")
         offline_profiler.profile(opcode="p2p")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -507,7 +507,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -551,9 +551,9 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 1
         global_configs.pipeline_model_parallel_size = 4
-        global_configs.data_parallel_size = 1
+        global_configs.data_parallel_size = 2
         global_configs.only_forward = False
 
         global_configs.num_nodes = 2
@@ -669,7 +669,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
