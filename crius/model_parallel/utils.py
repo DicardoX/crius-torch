@@ -87,9 +87,17 @@ class ParallelismPlan:
     pipeline_overlap_p2p_comm: bool = False
     """ Whether to overlap P2P communication with computation in pipeline parallelism. """
 
-    pipeline_forced_p2p_comm_overhead_ms: float = -1.0
+    pipeline_forced_p2p_overhead_ms: float = -1.0
     """ Forcibly set the p2p communication overhead, used when p2p overhead is non-negligible and 
     unpredictable at runtime (could check it via torch profiler). """
+
+    pipeline_per_stage_forced_tp_all_reduce_overhead_ms: List[float] = None
+    """ Forcibly set the TP all-reduce overhead for each stage, a workaround used when each stage shares 
+    heterogeneous bandwidth (e.g., stage 0 has NVLink, stage 1 has not), which is uncommon and typically forbidden. """
+
+    # pipeline_per_stage_forced_dp_all_reduce_overhead_ms: List[float] = None
+    # """ Forcibly set the DP all-reduce (grad sync) overhead for each stage, a workaround used when each stage shares 
+    # heterogeneous bandwidth (e.g., stage 0 has NVLink, stage 1 has not), which is uncommon and typically forbidden. """
 
     pipeline_use_boundary_markers: bool = False
     """ Whether to use boundary markers to indicate the start and end of a layer in the IR graph. """

@@ -223,6 +223,15 @@ class CriusDistProfiler:
                                 raise ValueError(f"Query key {query_key} not found in profiled data.")
                                 logger.warning(f"Query key {query_key} not found in profiled data, using default latency {node_latency}ms.")
 
+                        if (
+                            node.layer_type == "all_reduce" and getattr(node, "node_parallelism", "") == "tp" and 
+                            parallelism_plan.pipeline_per_stage_forced_tp_all_reduce_overhead_ms is not None and
+                            parallelism_plan.pipeline_per_stage_forced_tp_all_reduce_overhead_ms[node.stage_index] > 0.0
+                        ):
+                            # Forcibly overwrite TP all-reduce overhead. This is a workaround when each 
+                            # stage shares heterogeneous bandwidth.
+                            node_latency = parallelism_plan.pipeline_per_stage_forced_tp_all_reduce_overhead_ms[node.stage_index]
+                    
                     setattr(node, "latency", node_latency)
                 else:
                     # Non dominant nodes
@@ -450,9 +459,9 @@ class CriusDistProfiler:
         ):
             return []    # No P2P communication needed
         
-        if parallelism_plan.pipeline_forced_p2p_comm_overhead_ms > 0:
+        if parallelism_plan.pipeline_forced_p2p_overhead_ms > 0:
             return [
-                parallelism_plan.pipeline_forced_p2p_comm_overhead_ms 
+                parallelism_plan.pipeline_forced_p2p_overhead_ms 
                     for _ in range(parallelism_plan.pipeline_parallel_degree - 1)
             ]
 

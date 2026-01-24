@@ -319,7 +319,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="all_reduce")
         offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -357,8 +357,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_devices_per_node = 4
 
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 4
-        global_configs.data_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 2
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -379,11 +379,11 @@ class TorchModelProfileTest(unittest.TestCase):
         # pipeline_boundary_end_marker = ['dropout', 'add', ]
         # pipeline_boundary_start_marker = ['input_layernorm', ]
         pipeline_boundary_end_marker = ['final_layernorm', ]
-        # pipeline_forced_p2p_comm_overhead_ms = 10.0
-        # pipeline_forced_p2p_comm_overhead_ms = -1.0
         forced_grad_sync_latency_scale_factor = 4.0     # Manually tuned
         # use_many_to_many_p2p_offline_data = False
         # forced_p2p_latency_scale_factor = [0.95, 0.6]   # For send/recv and send_recv
+        per_stage_forced_tp_all_reduce_ms = [-1.0, 6.67]
+        per_stage_forced_dp_all_reduce_ms = [-1.0, 773.158]
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -397,9 +397,9 @@ class TorchModelProfileTest(unittest.TestCase):
             use_many_to_many_p2p_offline_data=True,
             use_many_to_many_all_reduce_dp_bw_offline_data=True,
             # forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
+            pipeline_per_stage_forced_tp_all_reduce_overhead_ms=per_stage_forced_tp_all_reduce_ms,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
-            # pipeline_forced_p2p_comm_overhead_ms=pipeline_forced_p2p_comm_overhead_ms,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
             pipeline_boundary_start_marker=pipeline_boundary_start_marker,
             pipeline_boundary_end_marker=pipeline_boundary_end_marker,
@@ -507,7 +507,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -551,8 +551,8 @@ class TorchModelProfileTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 4
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 2
         global_configs.only_forward = False
 
@@ -669,7 +669,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
