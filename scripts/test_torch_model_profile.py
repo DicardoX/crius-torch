@@ -357,8 +357,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_devices_per_node = 4
 
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 4
+        global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -382,8 +382,8 @@ class TorchModelProfileTest(unittest.TestCase):
         forced_grad_sync_latency_scale_factor = 4.0     # Manually tuned
         # use_many_to_many_p2p_offline_data = False
         # forced_p2p_latency_scale_factor = [0.95, 0.6]   # For send/recv and send_recv
-        per_stage_forced_tp_all_reduce_ms = [-1.0, 6.67]
-        per_stage_forced_dp_all_reduce_ms = [-1.0, 773.158]
+        # per_stage_forced_tp_all_reduce_ms = [-1.0, 6.67]
+        # per_stage_forced_dp_all_reduce_ms = [-1.0, 773.158]
 
         parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
@@ -397,7 +397,7 @@ class TorchModelProfileTest(unittest.TestCase):
             use_many_to_many_p2p_offline_data=True,
             use_many_to_many_all_reduce_dp_bw_offline_data=True,
             # forced_p2p_latency_scale_factor=forced_p2p_latency_scale_factor,
-            pipeline_per_stage_forced_tp_all_reduce_overhead_ms=per_stage_forced_tp_all_reduce_ms,
+            # pipeline_per_stage_forced_tp_all_reduce_overhead_ms=per_stage_forced_tp_all_reduce_ms,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_overlap_p2p_comm=False,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
@@ -552,8 +552,8 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 2
-        global_configs.data_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 4
+        global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         global_configs.num_nodes = 2
