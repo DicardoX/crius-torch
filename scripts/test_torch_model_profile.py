@@ -250,17 +250,19 @@ class TorchModelProfileTest(unittest.TestCase):
             device="cuda",
             num_warmup_steps=5,
             num_profile_steps=10,
-            force_overwrite=False,
+            force_overwrite=True,
             use_torch_empty_to_init_weight=True,
             use_transposed_weight=True,
             use_megatron_attention_softmax_in_fp32=True,
             use_many_to_many_p2p_offline_data=True,
             many_to_many_p2p_rank_mapping={
-                0: 4, 1: 5, 2: 6, 3: 7,     # Node 0
-                4: 0, 5: 1, 6: 2, 7: 3,     # Node 1
+                0: 2, 1: 3,
+                2: 0, 3: 1,
+                # 0: 4, 1: 5, 2: 6, 3: 7,     # Node 0
+                # 4: 0, 5: 1, 6: 2, 7: 3,     # Node 1
             },
-            many_to_many_sender_ranks=[0, 1, 2, 3],
-            many_to_many_recver_ranks=[4, 5, 6, 7],
+            many_to_many_sender_ranks=[0, 1],
+            many_to_many_recver_ranks=[2, 3],
             gemm_left_op_hidden_dims=[      # Only consider forward ops
                 256, 512, 1024, 2048, 4096, 8192, 16384, 
             ],
@@ -292,12 +294,12 @@ class TorchModelProfileTest(unittest.TestCase):
                 2, 4, 8, 16, 32,
             ],
             comm_data_sizes = [
-                # 2**i for i in range(1,27)] + [
-                2**i for i in range(1,31)] + [
+                2**i for i in range(1,27)] + [
+                # 2**i for i in range(1,31)] + [
                 # Special volumes
                 # 102400000, 204800000, 409600000, 50331648 // 2, 50331648, 100663296,
                 # 6647250944,
-                1871831040,
+                # 1871831040,
             ],
         )
         offline_profiler = CriusOfflineDataManager(
@@ -314,8 +316,8 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="masked_fill_")
         # offline_profiler.profile(opcode="softmax")
 
-        offline_profiler.profile(opcode="all_reduce")
-        # offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="all_reduce")
+        offline_profiler.profile(opcode="p2p")
 
     # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
@@ -342,7 +344,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         global_bs = 8
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -355,8 +357,8 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_devices_per_node = 4
 
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 4
+        global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
         # global_configs.enable_backward_graph_generation = True
@@ -539,7 +541,7 @@ class TorchModelProfileTest(unittest.TestCase):
         model_type = ModelType.GPT
         global_bs = 8
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
@@ -550,8 +552,8 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
-        global_configs.data_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 4
+        global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         global_configs.num_nodes = 2
@@ -667,7 +669,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )

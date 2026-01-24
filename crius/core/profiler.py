@@ -265,7 +265,8 @@ class CriusDistProfiler:
         return None
     
     def _get_comm_group_size_and_count(
-        self, node: IRNode, parallelism_plan: ParallelismPlan, forced_parallelism: str = None
+        self, node: IRNode, parallelism_plan: ParallelismPlan, forced_parallelism: str = None,
+        stage_index: int = None,
     ) -> Tuple[int, int]:
         """ Get the communication group size and number of GPU nodes. """
 
@@ -299,9 +300,30 @@ class CriusDistProfiler:
                 return (group_size, num_comm_nodes)
 
         elif parallelism == "pp":
-            if parallelism_plan.use_many_to_many_p2p_offline_data and global_configs.num_nodes > 1:
-                return (2 * global_configs.num_devices_per_node, 2)
-            return (2, 1) if global_configs.num_nodes == 1 else (2, 2)
+            # Pipeline parallelism is the outermost parallelism
+            assert parallelism_plan.pipeline_parallel_degree > 1
+            use_many_to_many_p2p = parallelism_plan.use_many_to_many_p2p_offline_data
+            if global_configs.num_nodes == 1:
+                # Homogeneous intra-node P2P bandwidth
+                return (2 * global_configs.num_devices_per_node, 1) if use_many_to_many_p2p else (2, 1)
+
+            elif parallelism_plan.pipeline_parallel_degree <= global_configs.num_nodes:
+                # Homogeneous inter-node P2P bandwidth
+                return (2 * global_configs.num_devices_per_node, 2) if use_many_to_many_p2p else (2, 2)
+            
+            else:
+                # Heterogeneous intra/inter-node P2P bandwidth
+                # Determine whether this stage introduces inter-node or intra-node P2P communication
+                assert parallelism_plan.pipeline_parallel_degree % global_configs.num_nodes == 0, \
+                    f"Pipeline degree ({parallelism_plan.pipeline_parallel_degree}) must be divisible " + \
+                    f"by the number of nodes ({global_configs.num_nodes})."
+                num_pp_groups_per_node = parallelism_plan.pipeline_parallel_degree // global_configs.num_nodes
+                if (stage_index + 1) % num_pp_groups_per_node != 0:
+                    # Intra-node P2P bandwidth
+                    return (2 * (global_configs.num_devices_per_node // num_pp_groups_per_node), 1) if use_many_to_many_p2p else (2, 1)
+                else:
+                    # Inter-node P2P bandwidth
+                    return (2 * (global_configs.num_devices_per_node // num_pp_groups_per_node), 2) if use_many_to_many_p2p else (2, 2)
         else:
             raise NotImplementedError("Unsupported node parallelism plan...")
 
@@ -429,8 +451,7 @@ class CriusDistProfiler:
                 parallelism_plan.pipeline_forced_p2p_comm_overhead_ms 
                     for _ in range(parallelism_plan.pipeline_parallel_degree - 1)
             ]
-        
-        comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp")
+
         # nbytes_per_numel = dtype_to_bytes[params_dtype]
         p2p_latencies = [[0.0, 0.0, 0.0] for _ in range(parallelism_plan.pipeline_parallel_degree - 1)]
         cur_stage_index = 0
@@ -438,6 +459,8 @@ class CriusDistProfiler:
             if node.stage_index != cur_stage_index:
                 assert node.stage_index == cur_stage_index + 1, "Invalid stage index increment."        
                 assert len(node.input_shapes) == 1, f"Invalid P2P node input shapes: {node.input_shapes}."
+                
+                comm_group_size, num_comm_nodes = self._get_comm_group_size_and_count(None, parallelism_plan, "pp", cur_stage_index)
                 p2p_numel = np.prod(node.input_shapes)
                 comm_data_size = p2p_numel
                 query_key = OfflineDataRecorder.get_query_key(
@@ -500,6 +523,7 @@ class CriusDistProfiler:
         and denotes stage `i` executes backward micro-batch `-j - 1` when `j < 0`.
         """
 
+        homo_p2p_latency = all([p2p_latencies[i][0] == p2p_latencies[i + 1][0] for i in range(len(p2p_latencies) - 1)])
         num_microbatches = parallelism_plan.num_microbatches
         num_stages = parallelism_plan.pipeline_parallel_degree
         overlap_p2p_comm = parallelism_plan.pipeline_overlap_p2p_comm
@@ -517,28 +541,37 @@ class CriusDistProfiler:
             t_fw = np.max(fw_lats) * (num_microbatches - 1) + np.sum(fw_lats)
             return t_fw
         
-        warmup_send_latencies = [0.0 for _ in range(num_stages - 1)]
-        steady_last_stage_send_recv_latency = 0.0
-        drain_recv_latencies = [0.0 for _ in range(num_stages - 1)]
-        if not overlap_p2p_comm:
-            warmup_send_latencies = [p2p_latencies[i][0] for i in range(num_stages - 1)]    # Only send
-            steady_last_stage_send_recv_latency = p2p_latencies[-1][2] if len(p2p_latencies) > 0 else 0.0   # Send + recv
-            drain_recv_latencies = [p2p_latencies[i][1] for i in range(num_stages - 1)]    # Only recv
+        # We prepend all recv latencies to the corresponded stage latencies
+        # Each send-recv pair of stage i and i + 1 is half-sharded for each.
+
+        # Warmup phase
+        warmup_latency = np.sum([stage_latencies[i][0] for i in range(num_stages - 1)])
+        warmup_latency += np.sum(p2p_latencies[i][0] for i in range(num_stages - 1))
+
+        # Steady phase
+        if homo_p2p_latency:
+            # Here, we assume perfect load balancing across pipeline stages. Therefore, we use 
+            # the last stage's latency refer to DynaPipe's Figure 10.
+            steady_latency = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1]) + \
+            (num_microbatches - 1) * (p2p_latencies[-1][2] if len(p2p_latencies) > 0 else 0.0)
         else:
-            raise NotImplementedError
+            # We treat the maximum (and the lastest) inter-node communication receiver stage as the bottleneck
+            # For example, if we have 8 stages (stage 0-7) and 4 nodes (node 0-3), we treat stage 6 as the 
+            # bottleneck of the steady phase.
+            assert (
+                parallelism_plan.pipeline_parallel_degree > global_configs.num_nodes and
+                parallelism_plan.pipeline_parallel_degree % global_configs.num_nodes == 0
+            )
+            num_pp_groups_per_node = parallelism_plan.pipeline_parallel_degree // global_configs.num_nodes
+            max_stage_index = parallelism_plan.pipeline_parallel_degree - num_pp_groups_per_node
+            # Here, we use send-recv (i.e., send_next, recv_next) to estimate the complex combination of 
+            # send_next/send_recv/recv_next/recv_prev. 
+            steady_latency = num_microbatches * \
+                (stage_latencies[max_stage_index][0] + stage_latencies[max_stage_index][1]) + \
+                (num_microbatches - 1) * (p2p_latencies[max_stage_index - 1][2] if len(p2p_latencies) > 0 else 0.0)
+        
+        # Drain phase
+        drain_latency = np.sum([stage_latencies[i][1] for i in range(num_stages - 1)]) + np.max(grad_sync_latencies)
+        drain_latency += np.sum(p2p_latencies[i][1] for i in range(num_stages - 1))
 
-        # Phase 1. Warmup
-        t_warmup = np.sum([stage_latencies[i][0] + warmup_send_latencies[i] for i in range(num_stages - 1)])
-
-        # Phase 2. Steady
-        # NOTE: Here, we assume perfect load balancing across pipeline stages. Therefore, we use 
-        #       the last stage's latency refer to DynaPipe's Figure 10.
-        t_steady = num_microbatches * (stage_latencies[-1][0] + stage_latencies[-1][1]) + \
-            (num_microbatches - 1) * steady_last_stage_send_recv_latency
-
-        # Phase 3. Drain
-        # NOTE: Approximation: grad sync overhead remains nearly similar across stages
-        t_drain = np.sum([stage_latencies[i][1] + drain_recv_latencies[i] for i in range(num_stages - 1)]) \
-            + np.max(grad_sync_latencies)
-
-        return (t_warmup + t_steady + t_drain)
+        return (warmup_latency + steady_latency + drain_latency)
