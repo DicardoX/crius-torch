@@ -287,21 +287,21 @@ class CriusDistProfiler:
         # - PP groups x 8: [0, 8], [1, 9], [2, 10], [3, 11], [4, 12], [5, 13], [6, 14], [7, 15] 
         # See: https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/parallel_state.py#L272
         
+        tp = parallelism_plan.tensor_parallel_degree
+        dp = parallelism_plan.data_parallel_degree
+        pp = parallelism_plan.pipeline_parallel_degree
         parallelism = node.node_parallelism if forced_parallelism is None else forced_parallelism
         if parallelism == "tp":
-            num_comm_nodes = int(np.ceil(parallelism_plan.tensor_parallel_degree / global_configs.num_devices_per_node))
-            return (parallelism_plan.tensor_parallel_degree, num_comm_nodes)
+            num_comm_nodes = int(np.ceil(tp / global_configs.num_devices_per_node))
+            return (tp, num_comm_nodes)
         elif parallelism == "dp":
             if parallelism_plan.use_many_to_many_all_reduce_dp_bw_offline_data:
                 # Those TP ranks that share the same part of model parameters constitute the same DP group, 
                 # in which the gradient synchronization is performed.
-                group_size = parallelism_plan.data_parallel_degree
-                num_pp_groups_per_node = max(1, parallelism_plan.pipeline_parallel_degree // global_configs.num_nodes)
-                num_comm_nodes = parallelism_plan.data_parallel_degree // \
-                    max(1, 
-                        global_configs.num_devices_per_node // 
-                        (parallelism_plan.tensor_parallel_degree * num_pp_groups_per_node)
-                    )
+                group_size = dp
+                num_pp_groups_per_node = max(1, pp // global_configs.num_nodes)
+                num_comm_nodes = dp // \
+                    max(1, global_configs.num_devices_per_node // (tp * num_pp_groups_per_node))
                 return (group_size, num_comm_nodes)
             
             else:
@@ -314,23 +314,22 @@ class CriusDistProfiler:
 
         elif parallelism == "pp":
             # Pipeline parallelism is the outermost parallelism
-            assert parallelism_plan.pipeline_parallel_degree > 1
+            assert pp > 1
             use_many_to_many_p2p = parallelism_plan.use_many_to_many_p2p_offline_data
             if global_configs.num_nodes == 1:
                 # Homogeneous intra-node P2P bandwidth
-                return (2 * global_configs.num_devices_per_node, 1) if use_many_to_many_p2p else (2, 1)
+                return (2 * (dp * tp), 1) if use_many_to_many_p2p else (2, 1)
 
-            elif parallelism_plan.pipeline_parallel_degree <= global_configs.num_nodes:
+            elif pp <= global_configs.num_nodes:
                 # Homogeneous inter-node P2P bandwidth
                 return (2 * global_configs.num_devices_per_node, 2) if use_many_to_many_p2p else (2, 2)
             
             else:
                 # Heterogeneous intra/inter-node P2P bandwidth
                 # Determine whether this stage introduces inter-node or intra-node P2P communication
-                assert parallelism_plan.pipeline_parallel_degree % global_configs.num_nodes == 0, \
-                    f"Pipeline degree ({parallelism_plan.pipeline_parallel_degree}) must be divisible " + \
-                    f"by the number of nodes ({global_configs.num_nodes})."
-                num_pp_groups_per_node = parallelism_plan.pipeline_parallel_degree // global_configs.num_nodes
+                assert pp % global_configs.num_nodes == 0, \
+                    f"Pipeline degree ({pp}) must be divisible by the number of nodes ({global_configs.num_nodes})."
+                num_pp_groups_per_node = pp // global_configs.num_nodes
                 if (stage_index + 1) % num_pp_groups_per_node != 0:
                     # Intra-node P2P bandwidth
                     return (2 * (global_configs.num_devices_per_node // num_pp_groups_per_node), 1) if use_many_to_many_p2p else (2, 1)
