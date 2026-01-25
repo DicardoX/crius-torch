@@ -322,7 +322,7 @@ class CriusDistProfiler:
 
             elif pp <= global_configs.num_nodes:
                 # Homogeneous inter-node P2P bandwidth
-                return (2 * global_configs.num_devices_per_node, 2) if use_many_to_many_p2p else (2, 2)
+                return (2 * (dp * tp), 2 * (dp * tp) // global_configs.num_devices_per_node) if use_many_to_many_p2p else (2, 2)
             
             else:
                 # Heterogeneous intra/inter-node P2P bandwidth
