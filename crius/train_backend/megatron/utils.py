@@ -76,7 +76,7 @@ def initialize_virtual_distributed(
 
 def initialize_distributed(
     tensor_model_parallel_size: int = 1, pipeline_model_parallel_size: int = 1, 
-    virtual_pipeline_model_parallel_size: int = 1,
+    virtual_pipeline_model_parallel_size: int = 1, tp_comm_overlap: bool = False,
 ):
     """ Initialize the Megatron backend. 
     
@@ -100,6 +100,44 @@ def initialize_distributed(
         tensor_model_parallel_size, pipeline_model_parallel_size, virtual_pipeline_model_parallel_size,
     )    
     logger.info(f"=========> Megatron distributed training initialized with rank {global_rank} and world size {torchrun_world_size}.")
+
+    if tp_comm_overlap:
+        # Overlap TP communication
+        _initialize_tp_communicators()
+
+
+def _initialize_tp_communicators():
+    """initializing the communicators with user buffers for high-performance tensor-model-parallel
+    communication overlap"""
+
+    try:
+        import transformer_engine
+        import yaml
+        from transformer_engine.pytorch import module as te_module
+
+    except ImportError:
+        raise RuntimeError(
+            "Tensor Parallel Communication/GEMM Overlap optimization needs 'yaml' and "
+            "'transformer_engine' packages"
+        )
+
+    ub_cfgs = {}
+    input_shape = [
+        (global_configs.sequence_length * global_configs.micro_batch_size) 
+            // global_configs.context_parallel_size,
+        global_configs.hidden_size,
+    ]
+
+    # We create a MPI process group, which is needed to bootstrap the pipelined
+    # tensor-model-parallel communication overlap.
+    # We got: RuntimeError: Distributed package doesn't have MPI built in. MPI is only 
+    #         included if you build PyTorch from source on a host that has MPI installed.
+    # Thus we turn to use NCCL as the bootstrap backend.
+    torch.distributed.new_group(backend='nccl')
+    te_module.base.initialize_ub(
+        shape=input_shape, tp_size=global_configs.tensor_model_parallel_size,
+        use_fp8=False, ub_cfgs=ub_cfgs, bootstrap_backend="nccl",
+    )
 
 
 class WrappedTensor:

@@ -70,6 +70,9 @@ class GlobalEnvConfigs:
     pipeline_model_parallel_size: int = 1
     """ Inter-layer model parallelism. Splits transformer layers across GPU ranks. """
 
+    context_parallel_size: int = 1
+    """ Context parallelism. """
+
     ###################
     # Compile Options #
     ###################
@@ -114,6 +117,21 @@ class GlobalEnvConfigs:
         }
     )
     """ Function implementations of communication operators. """
+
+    ########################
+    # Input Configurations #
+    ########################
+    micro_batch_size: int = 0
+    """ Micro-batch size. """
+
+    sequence_length: int = 0
+    """ Sequence length. """
+
+    ########################
+    # Model Configurations #
+    ########################
+    hidden_size: int = 0
+    """ Transformer hidden size. """
 
 
 global_configs = GlobalEnvConfigs()

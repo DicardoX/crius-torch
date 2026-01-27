@@ -93,7 +93,6 @@ class MLP(MegatronModule):
             skip_bias_add=True,
             is_expert=is_expert,
             tp_comm_buffer_name="fc1",
-            tp_group=mpu.get_tensor_model_parallel_group(),
         )
 
         self.activation_func = self.config.activation_func
@@ -119,7 +118,6 @@ class MLP(MegatronModule):
             skip_bias_add=True,
             is_expert=is_expert,
             tp_comm_buffer_name="fc2",
-            tp_group=mpu.get_tensor_model_parallel_group(),
         )
 
     def forward(self, hidden_states, per_token_scale=None):

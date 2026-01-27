@@ -126,9 +126,11 @@ class TrainMFUTest(unittest.TestCase):
         # Use the following commands to reinstall te:
         # ```
         # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]
+        # pip3 install pyyaml
         # ```
         os.environ["USE_TRANSFORMER_ENGINE"] = "True"
         tp_comm_overlap = True
+        sequence_parallel = True
 
         # Pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -145,11 +147,15 @@ class TrainMFUTest(unittest.TestCase):
         num_micro_batches = global_bs // (micro_batch_size * global_configs.data_parallel_size)
         global_bs = micro_batch_size * num_micro_batches    # of this DP rank
 
+        global_configs.micro_batch_size = micro_batch_size
+        global_configs.sequence_length = seq_len
+
         # Init distributed
         initialize_distributed(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+            tp_comm_overlap=tp_comm_overlap,
         )
         model_parallel_cuda_manual_seed(1234)
 
@@ -158,6 +164,7 @@ class TrainMFUTest(unittest.TestCase):
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+            sequence_parallel=sequence_parallel,
             num_layers=num_layers,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
@@ -165,6 +172,8 @@ class TrainMFUTest(unittest.TestCase):
             pipeline_dtype=dtype,
             fp16=(dtype == torch.float16),
             tp_comm_overlap=tp_comm_overlap,
+            tp_comm_overlap_ag=True,
+            tp_comm_overlap_rs=True,
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_sync=batch_p2p_sync,
         )

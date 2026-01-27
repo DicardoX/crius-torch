@@ -4,6 +4,7 @@
 
 """ Compilable implementations of Megatron's attention modules. """
 
+import os
 from typing import Any, Dict, Optional, Union, Tuple
 import math
 
@@ -41,6 +42,14 @@ class SelfAttention(MegatronModule):
     ) -> None:
         super().__init__(config=config)
 
+        self.use_te = (os.environ.get("USE_TRANSFORMER_ENGINE", "False") == "True")
+        if self.use_te:
+            import transformer_engine as te
+            import transformer_engine.pytorch
+            from megatron.core.extensions.transformer_engine import (
+                TEColumnParallelLinear, TERowParallelLinear, 
+            )
+
         # For normal attention without groups, num_query_groups == num_attention_heads,
         # so these two will be the same
         self.config = config
@@ -68,6 +77,16 @@ class SelfAttention(MegatronModule):
             device=global_configs.current_device,
             dtype=config.params_dtype,
             skip_bias_add=False,
+        ) if not self.use_te else TEColumnParallelLinear(
+            input_size=self.config.hidden_size,
+            output_size=(self.query_projection_size + 2 * self.kv_projection_size),
+            config=self.config, 
+            init_method=self.config.init_method,
+            gather_output=False,
+            bias=self.config.add_bias_linear or self.config.add_qkv_bias,
+            skip_bias_add=False,
+            is_expert=False,
+            tp_comm_buffer_name="qkv",
         )
         self.q_layernorm = None     # NOTE: IdentityOp() cannot be compiled 
         self.k_layernorm = None
@@ -86,6 +105,16 @@ class SelfAttention(MegatronModule):
             dtype=config.params_dtype,
             input_is_parallel=True,
             skip_bias_add=False,
+        ) if not self.use_te else TERowParallelLinear(
+            input_size=self.query_projection_size,
+            output_size=self.config.hidden_size,
+            config=self.config, 
+            init_method=self.config.output_layer_init_method,
+            bias=self.config.add_bias_linear,
+            input_is_parallel=True,
+            skip_bias_add=True,
+            is_expert=False,
+            tp_comm_buffer_name="proj",
         )
     
     def get_query_key_value_tensors(self, hidden_states, key_value_states=None, split_qkv=True):
