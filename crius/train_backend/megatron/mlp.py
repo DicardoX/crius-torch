@@ -4,6 +4,7 @@
 
 """ Compilable implementations of Megatron's MLP modules. """
 
+import os
 from typing import Any, Dict, Optional, Union
 import warnings
 
@@ -11,6 +12,7 @@ import torch
 from torch import Tensor
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core import mpu
 
 from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
 from crius.global_envs import global_configs
@@ -45,6 +47,14 @@ class MLP(MegatronModule):
     ) -> None:
         super().__init__(config=config)
 
+        self.use_te = (os.environ.get("USE_TRANSFORMER_ENGINE", "False") == "True")
+        if self.use_te:
+            import transformer_engine as te
+            import transformer_engine.pytorch
+            from megatron.core.extensions.transformer_engine import (
+                TEColumnParallelLinear, TERowParallelLinear, 
+            )
+
         self.config = config
         self.input_size = input_size if input_size != None else self.config.hidden_size
         if ffn_hidden_size is None:
@@ -73,12 +83,23 @@ class MLP(MegatronModule):
             dtype=self.config.params_dtype,
             skip_bias_add=True,
             is_expert=is_expert,
+        ) if not self.use_te else TEColumnParallelLinear(
+            input_size=self.input_size,
+            output_size=ffn_hidden_size,
+            config=self.config, 
+            init_method=self.config.init_method,
+            gather_output=False,
+            bias=self.config.add_bias_linear,
+            skip_bias_add=True,
+            is_expert=is_expert,
+            tp_comm_buffer_name="fc1",
+            tp_group=mpu.get_tensor_model_parallel_group(),
         )
 
         self.activation_func = self.config.activation_func
 
         self.linear_fc2 = RowParallelLinear(
-            self.config.ffn_hidden_size,
+            ffn_hidden_size,
             self.config.hidden_size,
             tp_size=self.config.tensor_model_parallel_size,
             bias=self.config.add_bias_linear,
@@ -88,6 +109,17 @@ class MLP(MegatronModule):
             input_is_parallel=True,
             skip_bias_add=True,
             is_expert=is_expert,
+        ) if not self.use_te else TERowParallelLinear(
+            input_size=ffn_hidden_size,
+            output_size=self.config.hidden_size,
+            config=self.config, 
+            init_method=self.config.output_layer_init_method,
+            bias=self.config.add_bias_linear,
+            input_is_parallel=True,
+            skip_bias_add=True,
+            is_expert=is_expert,
+            tp_comm_buffer_name="fc2",
+            tp_group=mpu.get_tensor_model_parallel_group(),
         )
 
     def forward(self, hidden_states, per_token_scale=None):
