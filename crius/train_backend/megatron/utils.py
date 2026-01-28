@@ -133,7 +133,7 @@ def _initialize_tp_communicators():
     # We got: RuntimeError: Distributed package doesn't have MPI built in. MPI is only 
     #         included if you build PyTorch from source on a host that has MPI installed.
     # Thus we turn to use NCCL as the bootstrap backend.
-    torch.distributed.new_group(backend='nccl')
+    # torch.distributed.new_group(backend='nccl')
     te_module.base.initialize_ub(
         shape=input_shape, tp_size=global_configs.tensor_model_parallel_size,
         use_fp8=False, ub_cfgs=ub_cfgs, bootstrap_backend="nccl",

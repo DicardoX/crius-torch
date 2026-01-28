@@ -171,6 +171,9 @@ class TrainMFUTest(unittest.TestCase):
 
         global_configs.micro_batch_size = micro_batch_size
         global_configs.sequence_length = seq_len
+        global_configs.hidden_size = hidden_size
+
+        # TODO(chunyu): Maybe because we missed setting global_configs.hidden_size...
 
         # Init distributed
         initialize_distributed(
