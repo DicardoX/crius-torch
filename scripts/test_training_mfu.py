@@ -136,9 +136,22 @@ class TrainMFUTest(unittest.TestCase):
         # ```
         # export UB_SKIPMC=1
         # ```
-        os.environ["USE_TRANSFORMER_ENGINE"] = "False"
-        tp_comm_overlap = False
-        sequence_parallel = False
+        # NOTE: These still incurs error: RuntimeError: /TransformerEngine/transformer_engine/common/
+        #       comm_gemm_overlap/userbuffers/userbuffers-host.cpp:597 in function register_user_buffer_collective: 
+        #       CUDA Error: invalid argument.
+        # Therefore, we choose to build TE from source: 
+        # ```
+        # pip3 install cmake ninja
+        # pip3 install pybind11
+        # export NVTE_CUDA_ARCHS="86"   # For A40
+        # git clone --branch stable --recursive https://github.com/NVIDIA/TransformerEngine.git
+        # cd TransformerEngine
+        # export NVTE_FRAMEWORK=pytorch         # Optionally set framework
+        # pip3 install --no-build-isolation .   # Build and install
+        # ```
+        os.environ["USE_TRANSFORMER_ENGINE"] = "True"
+        tp_comm_overlap = True
+        sequence_parallel = True
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
