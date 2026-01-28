@@ -47,7 +47,7 @@ class SelfAttention(MegatronModule):
             import transformer_engine as te
             import transformer_engine.pytorch
             from megatron.core.extensions.transformer_engine import (
-                TEColumnParallelLinear, TERowParallelLinear, 
+                TELayerNormColumnParallelLinear, TERowParallelLinear, 
             )
 
         # For normal attention without groups, num_query_groups == num_attention_heads,
@@ -77,7 +77,7 @@ class SelfAttention(MegatronModule):
             device=global_configs.current_device,
             dtype=config.params_dtype,
             skip_bias_add=False,
-        ) if not self.use_te else TEColumnParallelLinear(
+        ) if not self.use_te else TELayerNormColumnParallelLinear(
             input_size=self.config.hidden_size,
             output_size=(self.query_projection_size + 2 * self.kv_projection_size),
             config=self.config, 

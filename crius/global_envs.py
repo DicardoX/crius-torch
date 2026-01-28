@@ -68,6 +68,12 @@ class GlobalEnvConfigs:
     pipeline_model_parallel_size: int = 1
     """ Inter-layer model parallelism. Splits transformer layers across GPU ranks. """
 
+    sequence_parallel: bool = False
+    """ Makes tensor parallelism more memory efficient for LLMs (20B+) by parallelizing layer norms
+        and dropout sequentially.  See Reducing Activation Recomputation in Large Transformer Models
+        (https://arxiv.org/abs/2205.05198) for more details.
+    """
+
     context_parallel_size: int = 1
     """ Context parallelism. """
 

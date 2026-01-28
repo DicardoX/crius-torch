@@ -52,7 +52,7 @@ class MLP(MegatronModule):
             import transformer_engine as te
             import transformer_engine.pytorch
             from megatron.core.extensions.transformer_engine import (
-                TEColumnParallelLinear, TERowParallelLinear, 
+                TELayerNormColumnParallelLinear, TERowParallelLinear, 
             )
 
         self.config = config
@@ -83,7 +83,7 @@ class MLP(MegatronModule):
             dtype=self.config.params_dtype,
             skip_bias_add=True,
             is_expert=is_expert,
-        ) if not self.use_te else TEColumnParallelLinear(
+        ) if not self.use_te else TELayerNormColumnParallelLinear(
             input_size=self.input_size,
             output_size=ffn_hidden_size,
             config=self.config, 

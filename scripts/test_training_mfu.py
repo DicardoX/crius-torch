@@ -99,6 +99,10 @@ class TrainMFUTest(unittest.TestCase):
             post_process = mpu.is_pipeline_last_stage()
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
+        def megatron_native_model_provider():
+            """ Megatron-native model provider function. """
+            raise NotImplementedError
+
         model_type = ModelType.GPT
         global_bs = 8
         seq_len = 1024
@@ -136,22 +140,9 @@ class TrainMFUTest(unittest.TestCase):
         # ```
         # export UB_SKIPMC=1
         # ```
-        # NOTE: These still incurs error: RuntimeError: /TransformerEngine/transformer_engine/common/
-        #       comm_gemm_overlap/userbuffers/userbuffers-host.cpp:597 in function register_user_buffer_collective: 
-        #       CUDA Error: invalid argument.
-        # Therefore, we choose to build TE from source: 
-        # ```
-        # pip3 install cmake ninja
-        # pip3 install pybind11
-        # export NVTE_CUDA_ARCHS="86"   # For A40
-        # git clone --branch stable --recursive https://github.com/NVIDIA/TransformerEngine.git
-        # cd TransformerEngine
-        # export NVTE_FRAMEWORK=pytorch         # Optionally set framework
-        # pip3 install --no-build-isolation .   # Build and install
-        # ```
         os.environ["USE_TRANSFORMER_ENGINE"] = "True"
         tp_comm_overlap = True
-        sequence_parallel = True
+        global_configs.sequence_parallel = True
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -173,8 +164,6 @@ class TrainMFUTest(unittest.TestCase):
         global_configs.sequence_length = seq_len
         global_configs.hidden_size = hidden_size
 
-        # TODO(chunyu): Maybe because we missed setting global_configs.hidden_size...
-
         # Init distributed
         initialize_distributed(
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
@@ -189,7 +178,7 @@ class TrainMFUTest(unittest.TestCase):
             tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
             pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
             virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
-            sequence_parallel=sequence_parallel,
+            sequence_parallel=global_configs.sequence_parallel,
             num_layers=num_layers,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
