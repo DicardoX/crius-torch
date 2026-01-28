@@ -112,8 +112,8 @@ class TrainMFUTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 1
-        global_configs.pipeline_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 2
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 

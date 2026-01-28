@@ -73,7 +73,7 @@ class GlobalEnvConfigs:
 
     remove_p2p_comm_redundancy_in_hybrid_parallel: bool = True
     """ Perform inter-stage P2P communication only between intra-stage's rank 0, rather than
-     between ranks of all DP groups. Then, in the destination stage, perform an additional 
+     between ranks of all PP groups. Then, in the destination stage, perform an additional 
      broadcast across all intra-stage ranks. """
 
     # noninterleave_overlap_p2p_comm: bool = True
