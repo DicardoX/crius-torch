@@ -102,7 +102,7 @@ class TrainMFUTest(unittest.TestCase):
         model_type = ModelType.GPT
         global_bs = 8
         seq_len = 1024
-        num_micro_batches = 2
+        num_micro_batches = 4
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
@@ -112,8 +112,8 @@ class TrainMFUTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.tensor_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
@@ -136,14 +136,18 @@ class TrainMFUTest(unittest.TestCase):
         # ```
         # export UB_SKIPMC=1
         # ```
-        os.environ["USE_TRANSFORMER_ENGINE"] = "True"
-        tp_comm_overlap = True
-        sequence_parallel = True
+        os.environ["USE_TRANSFORMER_ENGINE"] = "False"
+        tp_comm_overlap = False
+        sequence_parallel = False
 
         # Pipeline optimizations
+        global_configs.noninterleave_overlap_p2p_comm = True
+
+        # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
         overlap_p2p_comm = False
-        batch_p2p_sync = True
+        batch_p2p_comm = False
+        batch_p2p_sync = False
         
         # Get number of microbatches
         # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
@@ -183,6 +187,7 @@ class TrainMFUTest(unittest.TestCase):
             tp_comm_overlap_ag=True,
             tp_comm_overlap_rs=True,
             overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
             batch_p2p_sync=batch_p2p_sync,
         )
 

@@ -20,10 +20,8 @@ __all__ = [
 # Logger
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+logger.setLevel(logging.DEBUG)
 
-#########################
-# Global Configurations #
-#########################
 
 @dataclass
 class GlobalEnvConfigs:

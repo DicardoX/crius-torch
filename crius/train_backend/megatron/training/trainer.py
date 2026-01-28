@@ -22,7 +22,7 @@ from megatron.core import parallel_state, tensor_parallel
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.pipeline_parallel.schedules import (
-    get_forward_backward_func, set_current_microbatch)
+    set_current_microbatch)
 from megatron.core.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.distributed.finalize_model_grads import finalize_model_grads
@@ -33,6 +33,7 @@ from megatron.core.utils import get_attr_wrapped_model
 
 from crius.tools.mfu_logger import (MFULogger, MFULoggerModelConfig)
 from crius.global_envs import logger
+from crius.train_backend.megatron.training.schedules import forward_backward_pipelining_without_interleaving
 from crius.train_backend.megatron.training.utils import log_on_rank, Timer
 
 __all__ = [ "ModelType", "Trainer", ]
@@ -118,7 +119,7 @@ class Trainer:
 
     def _init_forward_backward_func(self) -> None:
         """ Initialize forward-backward pipeline function. """
-        self.forward_backward_func = get_forward_backward_func()
+        self.forward_backward_func = forward_backward_pipelining_without_interleaving
     
     def train_step(self) -> Tuple[List[torch.Tensor]]:
         """ Training step for one iteration of a mini-batch. """
@@ -236,7 +237,7 @@ class Trainer:
             raw_record = self.timer._records.pop("train_step")
             e2e_iter_times = [round(_r.elapsed, 3) for _r in raw_record]
             e2e_iter_times = e2e_iter_times[1:]     # Warmup iter excluded
-            
+
             if "e2e_iter_time" in metric_types:
                 log_on_rank(
                     msg=f"Average end-to-end iteration time (ms): {np.mean(e2e_iter_times)}",
