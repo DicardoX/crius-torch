@@ -69,8 +69,8 @@ class TrainMFUTest(unittest.TestCase):
               f"Training TFLOPS: {train_tflops}")
 
     # @unittest.skip("Pass.")
-    def test_meagtron_ground_truth_gpt(self):
-        """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
+    def test_meagtron_train_mfu_gpt(self):
+        """ Run the parallelized Megatron model, using Megatron's parallelization codes. """
 
         # import os
         # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -123,10 +123,18 @@ class TrainMFUTest(unittest.TestCase):
 
         # Transformer engine
         # NOTE: If error: AttributeError: module 'transformer_engine' has no attribute 'pytorch'
-        # Use the following commands to reinstall te:
+        # Use the following commands to reinstall TE:
         # ```
         # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]
         # pip3 install pyyaml
+        # ```
+        # NOTE: If error: AssertionError: CUDA device, driver and/or toolkit version does not 
+        # support comm+GEMM overlap with CUDA Multicast. Launch app with UB_SKIPMC=1 to try CUDA IPC instead.
+        # This is because: CUDA multicast was added in CUDA 12.1.0 and the minimum hardware requirements are 
+        # SM 9.0 (Hopper), NVSwitch 3, NVLink 4 (see requirements for SHARP).
+        # Use the following commands to use CUDA IPC.
+        # ```
+        # export UB_SKIPMC=1
         # ```
         os.environ["USE_TRANSFORMER_ENGINE"] = "True"
         tp_comm_overlap = True
