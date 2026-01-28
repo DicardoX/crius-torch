@@ -140,14 +140,11 @@ class TrainMFUTest(unittest.TestCase):
         tp_comm_overlap = False
         sequence_parallel = False
 
-        # Pipeline optimizations
-        global_configs.noninterleave_overlap_p2p_comm = True
-
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
         overlap_p2p_comm = False
-        batch_p2p_comm = False
-        batch_p2p_sync = False
+        batch_p2p_comm = True
+        batch_p2p_sync = True
         
         # Get number of microbatches
         # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 

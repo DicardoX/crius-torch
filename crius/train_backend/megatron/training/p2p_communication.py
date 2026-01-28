@@ -411,7 +411,7 @@ def _communicate(
     return tensor_recv_prev, tensor_recv_next, reqs
 
 
-def sync_recv_forward(tensor_shape: Shape, config: ModelParallelConfig) -> torch.Tensor:
+def recv_forward(tensor_shape: Shape, config: ModelParallelConfig) -> torch.Tensor:
     """ Synchronously receive tensor from previous rank in pipeline (forward receive).
 
     See _communicate for argument details.
@@ -432,7 +432,7 @@ def sync_recv_forward(tensor_shape: Shape, config: ModelParallelConfig) -> torch
     return input_tensor
 
 
-def sync_recv_backward(tensor_shape: Shape, config: ModelParallelConfig) -> torch.Tensor:
+def recv_backward(tensor_shape: Shape, config: ModelParallelConfig) -> torch.Tensor:
     """ Synchronously receive tensor from next rank in pipeline (backward receive).
 
     See _communicate for argument details.
@@ -453,8 +453,12 @@ def sync_recv_backward(tensor_shape: Shape, config: ModelParallelConfig) -> torc
     return output_tensor_grad
 
 
-def async_send_forward(output_tensor: torch.Tensor, config: ModelParallelConfig) -> None:
-    """ Asynchronously Send tensor to next rank in pipeline (forward send).
+def send_forward(
+        output_tensor: torch.Tensor, 
+        config: ModelParallelConfig,
+        async_p2p_comm: bool = False,
+) -> None:
+    """ Send tensor to next rank in pipeline (forward send), could be sync or async.
 
     See _communicate for argument details.
     """
@@ -468,14 +472,18 @@ def async_send_forward(output_tensor: torch.Tensor, config: ModelParallelConfig)
             recv_next=False,
             tensor_shape=None,
             config=config,
-            wait_on_reqs=False,
+            wait_on_reqs=(not async_p2p_comm),
         )
     
     return wait_handles
 
 
-def async_send_backward(input_tensor_grad: torch.Tensor, config: ModelParallelConfig) -> None:
-    """ Asynchronously send tensor to previous rank in pipeline (backward send).
+def send_backward(
+    input_tensor_grad: torch.Tensor, 
+    config: ModelParallelConfig,
+    async_p2p_comm: bool = False,
+) -> None:
+    """ send tensor to previous rank in pipeline (backward send), could be sync or async.
 
     See _communicate for argument details.
     """
@@ -489,9 +497,9 @@ def async_send_backward(input_tensor_grad: torch.Tensor, config: ModelParallelCo
             recv_next=False,
             tensor_shape=None,
             config=config,
-            wait_on_reqs=False,
+            wait_on_reqs=(not async_p2p_comm),
         )
-    
+
     return wait_handles
 
 
@@ -505,8 +513,6 @@ def send_forward_recv_backward(
     if core.parallel_state.is_pipeline_last_stage():
         output_tensor_grad = None
     else:
-        if config.timers is not None:
-            config.timers('forward-send-backward-recv', log_level=2).start()
         _, output_tensor_grad, _ = _communicate(
             tensor_send_next=output_tensor,
             tensor_send_prev=None,
@@ -515,8 +521,6 @@ def send_forward_recv_backward(
             tensor_shape=tensor_shape,
             config=config,
         )
-        if config.timers is not None:
-            config.timers('forward-send-backward-recv').stop()
     return output_tensor_grad
 
 

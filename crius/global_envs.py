@@ -71,9 +71,14 @@ class GlobalEnvConfigs:
     context_parallel_size: int = 1
     """ Context parallelism. """
 
-    noninterleave_overlap_p2p_comm: bool = True
-    """ Enable P2P communication overlap in non-interleave (1f1b) pipeline. Useful when P2P bandwidth is limited, 
-    given that native Megatron only supports P2P overlap in interleaved pipeline (as it assumes enough P2P bandwidth). """
+    remove_p2p_comm_redundancy_in_hybrid_parallel: bool = True
+    """ Perform inter-stage P2P communication only between intra-stage's rank 0, rather than
+     between ranks of all DP groups. Then, in the destination stage, perform an additional 
+     broadcast across all intra-stage ranks. """
+
+    # noninterleave_overlap_p2p_comm: bool = True
+    # """ Enable P2P communication overlap in non-interleave (1f1b) pipeline. Useful when P2P bandwidth is limited, 
+    # given that native Megatron only supports P2P overlap in interleaved pipeline (as it assumes enough P2P bandwidth). """
 
     ###################
     # Compile Options #
