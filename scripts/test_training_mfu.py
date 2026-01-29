@@ -121,13 +121,13 @@ class TrainMFUTest(unittest.TestCase):
             )
 
         model_type = ModelType.GPT
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 4
+        global_bs = 16
+        seq_len = 2048
+        num_micro_batches = 1
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4
-        dtype = torch.float16
+        dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
         num_iters = 5
@@ -146,9 +146,10 @@ class TrainMFUTest(unittest.TestCase):
         # NOTE: If error: AttributeError: module 'transformer_engine' has no attribute 'pytorch'
         # Use the following commands to reinstall TE:
         # ```
-        # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]
+        # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]==1.13
         # pip3 install pyyaml
         # ```
+        # NOTE: Using TE==1.13 also solves the error: https://github.com/NVIDIA/TransformerEngine/issues/1585
         # NOTE: If error: AssertionError: CUDA device, driver and/or toolkit version does not 
         # support comm+GEMM overlap with CUDA Multicast. Launch app with UB_SKIPMC=1 to try CUDA IPC instead.
         # This is because: CUDA multicast was added in CUDA 12.1.0 and the minimum hardware requirements are 
@@ -202,6 +203,7 @@ class TrainMFUTest(unittest.TestCase):
             params_dtype=dtype,
             pipeline_dtype=dtype,
             fp16=(dtype == torch.float16),
+            bf16=(dtype == torch.bfloat16),
             tp_comm_overlap=tp_comm_overlap,
             tp_comm_overlap_ag=True,
             tp_comm_overlap_rs=True,
@@ -242,15 +244,12 @@ class TrainMFUTest(unittest.TestCase):
         model = megatron_native_model_provider(**model_kwargs)
         model = setup_model(model)
 
-        print(model)
-
-        exit(0)
-
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
         )
         (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler(
-            model, global_bs, num_iters, fp16=(dtype == torch.float16), params_dtype=dtype, 
+            model, global_bs, num_iters, fp16=(dtype == torch.float16), 
+            bf16=(dtype == torch.bfloat16), params_dtype=dtype, 
         )
 
         # Definition of forward step function
@@ -278,7 +277,8 @@ class TrainMFUTest(unittest.TestCase):
                  pipeline_model_parallel_size=megatron_config.pipeline_model_parallel_size,
             )
             # Forward
-            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+            with torch.cuda.amp.autocast(enabled=True, dtype=dtype):
+                output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
 
             return output_tensor,  partial(__loss_func, loss_mask)
 

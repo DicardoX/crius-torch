@@ -47,14 +47,6 @@ class MLP(MegatronModule):
     ) -> None:
         super().__init__(config=config)
 
-        self.use_te = (os.environ.get("USE_TRANSFORMER_ENGINE", "False") == "True")
-        if self.use_te:
-            import transformer_engine as te
-            import transformer_engine.pytorch
-            from megatron.core.extensions.transformer_engine import (
-                TELayerNormColumnParallelLinear, TERowParallelLinear, 
-            )
-
         self.config = config
         self.input_size = input_size if input_size != None else self.config.hidden_size
         if ffn_hidden_size is None:
@@ -83,16 +75,6 @@ class MLP(MegatronModule):
             dtype=self.config.params_dtype,
             skip_bias_add=True,
             is_expert=is_expert,
-        ) if not self.use_te else TELayerNormColumnParallelLinear(
-            input_size=self.input_size,
-            output_size=ffn_hidden_size,
-            config=self.config, 
-            init_method=self.config.init_method,
-            gather_output=False,
-            bias=self.config.add_bias_linear,
-            skip_bias_add=True,
-            is_expert=is_expert,
-            tp_comm_buffer_name="fc1",
         )
 
         self.activation_func = self.config.activation_func
@@ -108,18 +90,8 @@ class MLP(MegatronModule):
             input_is_parallel=True,
             skip_bias_add=True,
             is_expert=is_expert,
-        ) if not self.use_te else TERowParallelLinear(
-            input_size=ffn_hidden_size,
-            output_size=self.config.hidden_size,
-            config=self.config, 
-            init_method=self.config.output_layer_init_method,
-            bias=self.config.add_bias_linear,
-            input_is_parallel=True,
-            skip_bias_add=True,
-            is_expert=is_expert,
-            tp_comm_buffer_name="fc2",
         )
-
+    
     def forward(self, hidden_states, per_token_scale=None):
         """ Forward method for compilation. """
 

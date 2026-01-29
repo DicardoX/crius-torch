@@ -24,6 +24,8 @@ from megatron.core.distributed import (
     DistributedDataParallel, DistributedDataParallelConfig)
 from megatron.core.utils import get_attr_wrapped_model
 
+from crius.global_envs import global_configs
+
 __all__ = [
     "setup_model", 
     "get_train_data_iterator", 
@@ -125,6 +127,8 @@ def get_train_data_iterator(
         "sequence_length": sequence_length,
         "blend": None,
         "split": dataset_split,
+        # "data_parallel_size": global_configs.data_parallel_size,
+        # "sequence_parallel_size": global_configs.tensor_model_parallel_size if global_configs.sequence_parallel else 0,
         "random_seed": random_seed,
         "reset_position_ids": False,
         "reset_attention_mask": False,
