@@ -82,6 +82,11 @@ class TrainMFUTest(unittest.TestCase):
         from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
         from megatron.core.transformer.module import Float16Module
         from megatron.core.utils import get_model_config, get_attr_wrapped_model
+        from megatron.core.models.gpt import GPTModel as MegatronGPTModel
+        from megatron.core.models.gpt.gpt_layer_specs import (
+            get_gpt_layer_local_spec,
+            get_gpt_layer_with_transformer_engine_spec,
+        )
 
         from crius.train_backend.megatron.utils import initialize_distributed
         from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
@@ -99,9 +104,21 @@ class TrainMFUTest(unittest.TestCase):
             post_process = mpu.is_pipeline_last_stage()
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
-        def megatron_native_model_provider():
+        def megatron_native_model_provider(
+            megatron_config: Any, transformer_layer_spec: Any, vocab_size: int, max_seq_len: int,
+            pre_process=True, post_process=True,
+        ):
             """ Megatron-native model provider function. """
-            raise NotImplementedError
+            
+            return MegatronGPTModel(
+                config=megatron_config,
+                transformer_layer_spec=transformer_layer_spec,
+                vocab_size=vocab_size,
+                max_sequence_length=max_seq_len,
+                pre_process=pre_process,
+                post_process=post_process,
+                parallel_output=True,
+            )
 
         model_type = ModelType.GPT
         global_bs = 8
@@ -192,7 +209,6 @@ class TrainMFUTest(unittest.TestCase):
             batch_p2p_comm=batch_p2p_comm,
             batch_p2p_sync=batch_p2p_sync,
         )
-
         # NOTE: We monkey patch all input configuratons into `megatron_config`, 
         # instead of explicitly pass-in into the arguments of `Trainer()`.
         setattr(megatron_config, "global_batch_size", global_bs)
@@ -202,15 +218,33 @@ class TrainMFUTest(unittest.TestCase):
         setattr(megatron_config, "num_iters", num_iters)
         setattr(megatron_config, "dtype", dtype)
 
+        # Layer spec
+        transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
+
         # Model
-        model_kwargs={
+        # model_kwargs={
+        #     "megatron_config": megatron_config,
+        #     "max_seq_len": seq_len,
+        #     "vocab_size": vocab_size,
+        #     "device": device,
+        # }
+        # model = model_provider(**model_kwargs) if model_provider else None
+        # model = setup_model(model)
+        pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
+        model_kwargs = {
             "megatron_config": megatron_config,
-            "max_seq_len": seq_len,
+            "transformer_layer_spec": transformer_layer_spec,
             "vocab_size": vocab_size,
-            "device": device,
+            "max_seq_len": seq_len,
+            "pre_process": pre_process,
+            "post_process": post_process,
         }
-        model = model_provider(**model_kwargs) if model_provider else None
+        model = megatron_native_model_provider(**model_kwargs)
         model = setup_model(model)
+
+        print(model)
+
+        exit(0)
 
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
