@@ -7,3 +7,4 @@ from crius.train_backend.megatron.transformer_block import *
 from crius.train_backend.megatron.gpt_model import *
 from crius.train_backend.megatron.training import *
 from crius.train_backend.megatron.moe import *
+from crius.train_backend.megatron.megatron_native import *
