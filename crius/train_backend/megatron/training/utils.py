@@ -57,7 +57,10 @@ def setup_model(model: MegatronModule, wrap_with_ddp: bool = True) -> List[Megat
         model_module.cuda(torch.cuda.current_device())
 
     # FP16 conversion
-    if getattr(megatron_config, "dtype", torch.float16) == torch.float16:
+    if (
+        getattr(megatron_config, "dtype", torch.float16) == torch.float16 or
+        getattr(megatron_config, "dtype", torch.float16) == torch.bfloat16
+    ):
         model = [Float16Module(megatron_config, model_module) for model_module in model]
         # Empty CUDA cache released by FP16 conversion
         torch.cuda.empty_cache()

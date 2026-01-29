@@ -277,8 +277,8 @@ class TrainMFUTest(unittest.TestCase):
                  pipeline_model_parallel_size=megatron_config.pipeline_model_parallel_size,
             )
             # Forward
-            with torch.cuda.amp.autocast(enabled=True, dtype=dtype):
-                output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+            # with torch.cuda.amp.autocast(enabled=True, dtype=dtype):
+            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
 
             return output_tensor,  partial(__loss_func, loss_mask)
 
