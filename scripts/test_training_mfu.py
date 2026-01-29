@@ -121,12 +121,12 @@ class TrainMFUTest(unittest.TestCase):
             )
 
         model_type = ModelType.GPT
-        global_bs = 16
-        seq_len = 2048
+        global_bs = 8
+        seq_len = 1024
         num_micro_batches = 1
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 16
         dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
@@ -160,7 +160,15 @@ class TrainMFUTest(unittest.TestCase):
         # ```
         os.environ["USE_TRANSFORMER_ENGINE"] = "True"
         tp_comm_overlap = True
+        tp_comm_bulk_wgrad=True
+        tp_comm_bulk_dgrad=True
+        tp_comm_overlap_ag=True
+        tp_comm_overlap_rs=True
+        tp_comm_overlap_rs_dgrad=False      # This undermines MFU
         global_configs.sequence_parallel = True
+
+        # DP optimizations
+        overlap_grad_reduce = True
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -204,9 +212,14 @@ class TrainMFUTest(unittest.TestCase):
             pipeline_dtype=dtype,
             fp16=(dtype == torch.float16),
             bf16=(dtype == torch.bfloat16),
+            # TP overlap
             tp_comm_overlap=tp_comm_overlap,
-            tp_comm_overlap_ag=True,
-            tp_comm_overlap_rs=True,
+            tp_comm_bulk_wgrad=tp_comm_bulk_wgrad,
+            tp_comm_bulk_dgrad=tp_comm_bulk_dgrad,
+            tp_comm_overlap_ag=tp_comm_overlap_ag,
+            tp_comm_overlap_rs=tp_comm_overlap_rs,
+            tp_comm_overlap_rs_dgrad=tp_comm_overlap_rs_dgrad,
+            # Pipeline overlap
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
             batch_p2p_sync=batch_p2p_sync,
@@ -219,6 +232,7 @@ class TrainMFUTest(unittest.TestCase):
         setattr(megatron_config, "sequence_length", seq_len)
         setattr(megatron_config, "num_iters", num_iters)
         setattr(megatron_config, "dtype", dtype)
+        setattr(megatron_config, "overlap_grad_reduce", overlap_grad_reduce)
 
         # Layer spec
         transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
@@ -293,7 +307,7 @@ class TrainMFUTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
