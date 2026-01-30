@@ -77,9 +77,14 @@ class TorchModelProfileTest(unittest.TestCase):
     
           If hang in `torch.distributed.barrier()`, maybe use `export NCCL_P2P_LEVEL=NVL` to disable non-nvlink 
           GPU P2P access, see https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-p2p-level
+
+          Other useful envs:
+            export NCCL_SOCKET_IFNAME=eno2
+            export NCCL_P2P_DISABLE=1
+            export NCCL_IB_DISABLE=1
     """
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_one_torch_operator(self):
         """ Profile one torch operator in a hackable manner. """
 
@@ -98,7 +103,7 @@ class TorchModelProfileTest(unittest.TestCase):
         torch.distributed.init_process_group(
             world_size=torchrun_world_size, 
             rank=global_rank, 
-            device_id=torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}"),
+            # device_id=torch.device(f"cuda:{os.environ.get('LOCAL_RANK', 0)}"),
             backend="nccl",
         )
 
@@ -109,7 +114,8 @@ class TorchModelProfileTest(unittest.TestCase):
         }
 
         # comm_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
-        comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
+        # comm_tensor = torch.empty((1871831040,), device=torch.cuda.current_device(), dtype=torch.float16)
+        comm_tensor = torch.empty((1024 * 4 * 4096,), device=torch.cuda.current_device(), dtype=torch.float16)
         # comm_tensor = torch.empty((1219321856,), device=torch.cuda.current_device(), dtype=torch.float16)
         send_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
         recv_tensor = torch.empty((1024, 4, 4096), device=torch.cuda.current_device(), dtype=torch.float16)
@@ -319,7 +325,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="all_reduce")
         offline_profiler.profile(opcode="p2p")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 

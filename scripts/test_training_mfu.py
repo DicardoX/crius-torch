@@ -75,6 +75,9 @@ class TrainMFUTest(unittest.TestCase):
         # import os
         # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
+        os.environ["USE_TRANSFORMER_ENGINE"] = "False"
+        USE_TE = os.environ.get("USE_TRANSFORMER_ENGINE", "False") == "True"
+
         # from megatron.core.model_parallel_config import ModelParallelConfig
         from megatron.core.transformer.transformer_config import TransformerConfig
         from megatron.core import mpu, tensor_parallel
@@ -82,11 +85,12 @@ class TrainMFUTest(unittest.TestCase):
         from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
         from megatron.core.transformer.module import Float16Module
         from megatron.core.utils import get_model_config, get_attr_wrapped_model
-        from megatron.core.models.gpt import GPTModel as MegatronGPTModel
-        from megatron.core.models.gpt.gpt_layer_specs import (
-            get_gpt_layer_local_spec,
-            get_gpt_layer_with_transformer_engine_spec,
-        )
+        if USE_TE:
+            from megatron.core.models.gpt import GPTModel as MegatronGPTModel
+            from megatron.core.models.gpt.gpt_layer_specs import (
+                get_gpt_layer_local_spec,
+                get_gpt_layer_with_transformer_engine_spec,
+            )
 
         from crius.train_backend.megatron.utils import initialize_distributed
         from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
@@ -133,12 +137,12 @@ class TrainMFUTest(unittest.TestCase):
         num_iters = 5
         
         global_configs.training_backend = "megatron"
-        global_configs.tensor_model_parallel_size = 2
+        global_configs.tensor_model_parallel_size = 4
         global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
-        global_configs.num_nodes = 1
+        global_configs.num_nodes = 2
         global_configs.num_devices_per_node = 4
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
@@ -146,6 +150,8 @@ class TrainMFUTest(unittest.TestCase):
         # NOTE: If error: AttributeError: module 'transformer_engine' has no attribute 'pytorch'
         # Use the following commands to reinstall TE:
         # ```
+        # export NVTE_FRAMEWORK=pytorch
+        # export NVTE_CUDA_ARCHS="86"
         # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]==1.13
         # pip3 install pyyaml
         # ```
@@ -158,14 +164,21 @@ class TrainMFUTest(unittest.TestCase):
         # ```
         # export UB_SKIPMC=1
         # ```
-        os.environ["USE_TRANSFORMER_ENGINE"] = "True"
-        tp_comm_overlap = True
+        tp_comm_overlap = False
         tp_comm_bulk_wgrad=True
         tp_comm_bulk_dgrad=True
         tp_comm_overlap_ag=True
         tp_comm_overlap_rs=True
         tp_comm_overlap_rs_dgrad=False      # This undermines MFU
-        global_configs.sequence_parallel = True
+        global_configs.sequence_parallel = False
+        if USE_TE:
+            tp_comm_overlap = True
+            tp_comm_bulk_wgrad=True
+            tp_comm_bulk_dgrad=True
+            tp_comm_overlap_ag=True
+            tp_comm_overlap_rs=True
+            tp_comm_overlap_rs_dgrad=False      # This undermines MFU
+            global_configs.sequence_parallel = True
 
         # Data parallel optimizations
         overlap_grad_reduce = True
@@ -243,28 +256,31 @@ class TrainMFUTest(unittest.TestCase):
         setattr(megatron_config, "overlap_grad_reduce", overlap_grad_reduce)
 
         # Layer spec
-        transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
+        if USE_TE:
+            transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
 
         # Model
-        # model_kwargs={
-        #     "megatron_config": megatron_config,
-        #     "max_seq_len": seq_len,
-        #     "vocab_size": vocab_size,
-        #     "device": device,
-        # }
-        # model = model_provider(**model_kwargs) if model_provider else None
-        # model = setup_model(model)
-        pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
-        model_kwargs = {
-            "megatron_config": megatron_config,
-            "transformer_layer_spec": transformer_layer_spec,
-            "vocab_size": vocab_size,
-            "max_seq_len": seq_len,
-            "pre_process": pre_process,
-            "post_process": post_process,
-        }
-        model = megatron_native_model_provider(**model_kwargs)
-        model = setup_model(model)
+        if not USE_TE:
+            model_kwargs={
+                "megatron_config": megatron_config,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
+                "device": device,
+            }
+            model = model_provider(**model_kwargs) if model_provider else None
+            model = setup_model(model)
+        else:
+            pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
+            model_kwargs = {
+                "megatron_config": megatron_config,
+                "transformer_layer_spec": transformer_layer_spec,
+                "vocab_size": vocab_size,
+                "max_seq_len": seq_len,
+                "pre_process": pre_process,
+                "post_process": post_process,
+            }
+            model = megatron_native_model_provider(**model_kwargs)
+            model = setup_model(model)
 
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
