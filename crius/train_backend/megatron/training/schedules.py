@@ -327,6 +327,13 @@ def recv_backward(tensor_shapes, config):
 
 
 def send_forward(output_tensors, tensor_shapes, config):
+    
+    if parallel_state.get_pipeline_model_parallel_rank() == 0:
+        print(f"(TP {parallel_state.get_tensor_model_parallel_rank()}) Output tensors: {output_tensors}")
+    
+    # TODO(chunyu): Implement P2P redundancy remove.
+    exit(0)
+    
     if not isinstance(output_tensors, list):
         output_tensors = [output_tensors]
     for output_tensor, tensor_shape in zip(output_tensors, tensor_shapes):

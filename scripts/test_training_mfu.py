@@ -121,25 +121,25 @@ class TrainMFUTest(unittest.TestCase):
             )
 
         model_type = ModelType.GPT
-        global_bs = 8
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 1
+        num_micro_batches = 64
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 16
+        num_layers = 4
         dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 2
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 1
+        global_configs.pipeline_model_parallel_size = 2
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
         global_configs.num_nodes = 1
-        global_configs.num_devices_per_node = 2
+        global_configs.num_devices_per_node = 4
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
         # Transformer engine
@@ -165,10 +165,12 @@ class TrainMFUTest(unittest.TestCase):
         tp_comm_overlap_ag=True
         tp_comm_overlap_rs=True
         tp_comm_overlap_rs_dgrad=False      # This undermines MFU
-        global_configs.sequence_parallel = True
+        global_configs.sequence_parallel = False
 
         # DP optimizations
         overlap_grad_reduce = True
+        if global_configs.data_parallel_size == 1:
+            overlap_grad_reduce = False
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -197,7 +199,10 @@ class TrainMFUTest(unittest.TestCase):
             virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
             tp_comm_overlap=tp_comm_overlap,
         )
+        # This ensures all TP ranks share similar activations
         model_parallel_cuda_manual_seed(1234)
+        torch.manual_seed(1234)
+        np.random.seed(1234)
 
         # Create TransformerConfig for Megatron   
         megatron_config = TransformerConfig(
@@ -238,25 +243,25 @@ class TrainMFUTest(unittest.TestCase):
         transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
 
         # Model
-        # model_kwargs={
-        #     "megatron_config": megatron_config,
-        #     "max_seq_len": seq_len,
-        #     "vocab_size": vocab_size,
-        #     "device": device,
-        # }
-        # model = model_provider(**model_kwargs) if model_provider else None
-        # model = setup_model(model)
-        pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
-        model_kwargs = {
+        model_kwargs={
             "megatron_config": megatron_config,
-            "transformer_layer_spec": transformer_layer_spec,
-            "vocab_size": vocab_size,
             "max_seq_len": seq_len,
-            "pre_process": pre_process,
-            "post_process": post_process,
+            "vocab_size": vocab_size,
+            "device": device,
         }
-        model = megatron_native_model_provider(**model_kwargs)
+        model = model_provider(**model_kwargs) if model_provider else None
         model = setup_model(model)
+        # pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
+        # model_kwargs = {
+        #     "megatron_config": megatron_config,
+        #     "transformer_layer_spec": transformer_layer_spec,
+        #     "vocab_size": vocab_size,
+        #     "max_seq_len": seq_len,
+        #     "pre_process": pre_process,
+        #     "post_process": post_process,
+        # }
+        # model = megatron_native_model_provider(**model_kwargs)
+        # model = setup_model(model)
 
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
@@ -307,7 +312,7 @@ class TrainMFUTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )

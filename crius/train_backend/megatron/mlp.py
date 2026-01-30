@@ -27,7 +27,6 @@ class MLP(MegatronModule):
     hidden dimension, perform nonlinear transformation, and project the
     state back into h hidden dimension.
 
-
     Returns an output and a bias to be added to the output.
     If config.add_bias_linear is False, the bias returned is None.
 
