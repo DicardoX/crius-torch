@@ -321,7 +321,6 @@ def _broadcast(item):
 
 
 def recv_forward(tensor_shapes, config):
-    
     input_tensors = []
     if (
         not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or
@@ -368,7 +367,6 @@ def recv_forward(tensor_shapes, config):
 
 
 def recv_backward(tensor_shapes, config):
-    
     output_tensor_grads = []
     if (
         not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or
@@ -441,30 +439,102 @@ def send_backward(input_tensor_grads, tensor_shapes, config):
 
 
 def send_forward_recv_backward(output_tensors, tensor_shapes, config):
-    if not isinstance(output_tensors, list):
-        output_tensors = [output_tensors]
     output_tensor_grads = []
-    for output_tensor, tensor_shape in zip(output_tensors, tensor_shapes):
-        if tensor_shape is None:
-            output_tensor_grads.append(None)
-            continue
-        output_tensor_grad = p2p_communication.send_forward_recv_backward(
-            output_tensor, tensor_shape, config
-        )
-        output_tensor_grads.append(output_tensor_grad)
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or 
+        parallel_state.is_pipeline_last_stage() or
+        parallel_state.get_tensor_model_parallel_rank()  == 0   # Only TP rank 0 sends-recv
+    ):
+        if not isinstance(output_tensors, list):
+            output_tensors = [output_tensors]
+        for output_tensor, tensor_shape in zip(output_tensors, tensor_shapes):
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+                continue
+            output_tensor_grad = p2p_communication.send_forward_recv_backward(
+                output_tensor, tensor_shape, config
+            )
+            output_tensor_grads.append(output_tensor_grad)
+
+    if parallel_state.is_pipeline_last_stage():
+        # No need to broadcast
+        return output_tensor_grads
+        
+    if (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        # Broadcast to other TP ranks
+        _broadcast(output_tensor_grads)
+
+    elif (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() > 0
+    ):
+        # Receive from TP rank 0
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+            else:
+                input_tensor_ = torch.empty(
+                    tensor_shape,
+                    requires_grad=True,
+                    device=torch.cuda.current_device(),
+                    dtype=config.pipeline_dtype,
+                )
+                output_tensor_grads.append(input_tensor_)
+
+        _broadcast(output_tensor_grads)
+    
     return output_tensor_grads
 
 
 def send_backward_recv_forward(input_tensor_grads, tensor_shapes, config):
-    if not isinstance(input_tensor_grads, list):
-        input_tensor_grads = [input_tensor_grads]
     input_tensors = []
-    for input_tensor_grad, tensor_shape in zip(input_tensor_grads, tensor_shapes):
-        if tensor_shape is None:
-            input_tensors.append(None)
-            continue
-        input_tensor = p2p_communication.send_backward_recv_forward(
-            input_tensor_grad, tensor_shape, config
-        )
-        input_tensors.append(input_tensor)
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or
+        parallel_state.is_pipeline_first_stage() or
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        if not isinstance(input_tensor_grads, list):
+            input_tensor_grads = [input_tensor_grads]
+        for input_tensor_grad, tensor_shape in zip(input_tensor_grads, tensor_shapes):
+            if tensor_shape is None:
+                input_tensors.append(None)
+                continue
+            input_tensor = p2p_communication.send_backward_recv_forward(
+                input_tensor_grad, tensor_shape, config
+            )
+            input_tensors.append(input_tensor)
+    
+    if parallel_state.is_pipeline_first_stage():
+        # No need to broadcast
+        return input_tensors
+
+    if (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        # Broadcast to other TP ranks
+        _broadcast(input_tensors)
+
+    elif (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() > 0
+    ):
+        # Receive from TP rank 0
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                input_tensors.append(None)
+            else:
+                input_tensor_ = torch.empty(
+                    tensor_shape,
+                    requires_grad=True,
+                    device=torch.cuda.current_device(),
+                    dtype=config.pipeline_dtype,
+                )
+                input_tensors.append(input_tensor_)
+
+        _broadcast(input_tensors)
+
     return input_tensors

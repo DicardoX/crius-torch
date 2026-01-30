@@ -125,16 +125,16 @@ class TrainMFUTest(unittest.TestCase):
             )
 
         model_type = ModelType.GPT
-        global_bs = 64
+        global_bs = 16
         seq_len = 1024
-        num_micro_batches = 64
+        num_micro_batches = 16
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 4
         dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 3
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 4
@@ -331,7 +331,7 @@ class TrainMFUTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=False,
+            use_pytorch_profiler=True,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
