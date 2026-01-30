@@ -306,49 +306,138 @@ def forward_backward_pipelining_without_interleaving(
     return forward_data_store
 
 
+def _broadcast(item):
+    """ Broadcast item across tensor parallel group. """
+    if not isinstance(item, list):
+        item = [item]
+
+    for item_ in item:
+        if item_ is not None:
+            torch.distributed.broadcast(
+                tensor=item_, 
+                src=parallel_state.get_tensor_model_parallel_src_rank(), 
+                group=parallel_state.get_tensor_model_parallel_group(),             
+            )
+
+
 def recv_forward(tensor_shapes, config):
+    
     input_tensors = []
-    for tensor_shape in tensor_shapes:
-        if tensor_shape is None:
-            input_tensors.append(None)
-        else:
-            input_tensors.append(p2p_communication.recv_forward(tensor_shape, config))
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or
+        parallel_state.is_pipeline_first_stage() or
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                input_tensors.append(None)
+            else:
+                input_tensors.append(p2p_communication.recv_forward(tensor_shape, config))
+
+    if parallel_state.is_pipeline_first_stage():
+        # No need to broadcast
+        return input_tensors
+
+    if (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        # Broadcast to other TP ranks
+        _broadcast(input_tensors)
+
+    elif (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() > 0
+    ):
+        # Receive from TP rank 0
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                input_tensors.append(None)
+            else:
+                input_tensor_ = torch.empty(
+                    tensor_shape,
+                    requires_grad=True,
+                    device=torch.cuda.current_device(),
+                    dtype=config.pipeline_dtype,
+                )
+                input_tensors.append(input_tensor_)
+
+        _broadcast(input_tensors)
+
     return input_tensors
 
 
 def recv_backward(tensor_shapes, config):
+    
     output_tensor_grads = []
-    for tensor_shape in tensor_shapes:
-        if tensor_shape is None:
-            output_tensor_grads.append(None)
-        else:
-            output_tensor_grads.append(p2p_communication.recv_backward(tensor_shape, config))
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or
+        parallel_state.is_pipeline_last_stage() or
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+            else:
+                output_tensor_grads.append(p2p_communication.recv_backward(tensor_shape, config))
+    
+    if parallel_state.is_pipeline_last_stage():
+        # No need to broadcast
+        return output_tensor_grads
+
+    if (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() == 0
+    ):
+        # Broadcast to other TP ranks
+        _broadcast(output_tensor_grads)
+
+    elif (
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel and 
+        parallel_state.get_tensor_model_parallel_rank() > 0
+    ):
+        # Receive from TP rank 0
+        for tensor_shape in tensor_shapes:
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+            else:
+                input_tensor_ = torch.empty(
+                    tensor_shape,
+                    requires_grad=True,
+                    device=torch.cuda.current_device(),
+                    dtype=config.pipeline_dtype,
+                )
+                output_tensor_grads.append(input_tensor_)
+
+        _broadcast(output_tensor_grads)
+    
     return output_tensor_grads
 
 
 def send_forward(output_tensors, tensor_shapes, config):
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or 
+        parallel_state.get_tensor_model_parallel_rank()  == 0   # Only TP rank 0 sends forward
+    ):
+        if not isinstance(output_tensors, list):
+            output_tensors = [output_tensors]
+        for output_tensor, tensor_shape in zip(output_tensors, tensor_shapes):
+            if tensor_shape is None:
+                continue
+            p2p_communication.send_forward(output_tensor, config)
     
-    if parallel_state.get_pipeline_model_parallel_rank() == 0:
-        print(f"(TP {parallel_state.get_tensor_model_parallel_rank()}) Output tensors: {output_tensors}")
-    
-    # TODO(chunyu): Implement P2P redundancy remove.
-    exit(0)
-    
-    if not isinstance(output_tensors, list):
-        output_tensors = [output_tensors]
-    for output_tensor, tensor_shape in zip(output_tensors, tensor_shapes):
-        if tensor_shape is None:
-            continue
-        p2p_communication.send_forward(output_tensor, config)
-
 
 def send_backward(input_tensor_grads, tensor_shapes, config):
-    if not isinstance(input_tensor_grads, list):
-        input_tensor_grads = [input_tensor_grads]
-    for input_tensor_grad, tensor_shape in zip(input_tensor_grads, tensor_shapes):
-        if tensor_shape is None:
-            continue
-        p2p_communication.send_backward(input_tensor_grad, config)
+    if (
+        not global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel or 
+        parallel_state.get_tensor_model_parallel_rank()  == 0   # Only TP rank 0 sends backward
+    ):    
+        if not isinstance(input_tensor_grads, list):
+            input_tensor_grads = [input_tensor_grads]
+        for input_tensor_grad, tensor_shape in zip(input_tensor_grads, tensor_shapes):
+            if tensor_shape is None:
+                continue
+            p2p_communication.send_backward(input_tensor_grad, config)
 
 
 def send_forward_recv_backward(output_tensors, tensor_shapes, config):

@@ -126,11 +126,11 @@ class TrainMFUTest(unittest.TestCase):
         num_micro_batches = 64
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 2
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
@@ -165,12 +165,15 @@ class TrainMFUTest(unittest.TestCase):
         tp_comm_overlap_ag=True
         tp_comm_overlap_rs=True
         tp_comm_overlap_rs_dgrad=False      # This undermines MFU
-        global_configs.sequence_parallel = False
+        global_configs.sequence_parallel = True
 
-        # DP optimizations
+        # Data parallel optimizations
         overlap_grad_reduce = True
         if global_configs.data_parallel_size == 1:
             overlap_grad_reduce = False
+
+        # Pipeline optimizations
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel = True
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -243,25 +246,25 @@ class TrainMFUTest(unittest.TestCase):
         transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
 
         # Model
-        model_kwargs={
-            "megatron_config": megatron_config,
-            "max_seq_len": seq_len,
-            "vocab_size": vocab_size,
-            "device": device,
-        }
-        model = model_provider(**model_kwargs) if model_provider else None
-        model = setup_model(model)
-        # pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
-        # model_kwargs = {
+        # model_kwargs={
         #     "megatron_config": megatron_config,
-        #     "transformer_layer_spec": transformer_layer_spec,
-        #     "vocab_size": vocab_size,
         #     "max_seq_len": seq_len,
-        #     "pre_process": pre_process,
-        #     "post_process": post_process,
+        #     "vocab_size": vocab_size,
+        #     "device": device,
         # }
-        # model = megatron_native_model_provider(**model_kwargs)
+        # model = model_provider(**model_kwargs) if model_provider else None
         # model = setup_model(model)
+        pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
+        model_kwargs = {
+            "megatron_config": megatron_config,
+            "transformer_layer_spec": transformer_layer_spec,
+            "vocab_size": vocab_size,
+            "max_seq_len": seq_len,
+            "pre_process": pre_process,
+            "post_process": post_process,
+        }
+        model = megatron_native_model_provider(**model_kwargs)
+        model = setup_model(model)
 
         train_data_iterator = get_train_data_iterator(
             vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
@@ -312,7 +315,7 @@ class TrainMFUTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
