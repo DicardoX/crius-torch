@@ -125,16 +125,16 @@ class TrainMFUTest(unittest.TestCase):
             )
 
         model_type = ModelType.GPT
-        global_bs = 16
+        global_bs = 64
         seq_len = 1024
-        num_micro_batches = 16
+        num_micro_batches = 64
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 32
         dtype = torch.bfloat16
         device = "cuda"
         vocab_size = 50000
-        num_iters = 3
+        num_iters = 5
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 4
@@ -186,7 +186,7 @@ class TrainMFUTest(unittest.TestCase):
             overlap_grad_reduce = False
 
         # Pipeline optimizations
-        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel = True
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel = False
 
         # Megatron-native pipeline optimizations
         virtual_pipeline_model_parallel_size = None
@@ -331,7 +331,7 @@ class TrainMFUTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
