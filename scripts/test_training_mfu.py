@@ -68,7 +68,7 @@ class TrainMFUTest(unittest.TestCase):
         print(f"Operator latency (s): {(op_latency):.3f} | Model FLOPs per token: {flops_per_token} | " + 
               f"Training TFLOPS: {train_tflops}")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_meagtron_train_mfu_gpt(self):
         """ Run the parallelized Megatron model, using Megatron's parallelization codes. """
 
@@ -336,6 +336,108 @@ class TrainMFUTest(unittest.TestCase):
             pytorch_profiler_tp_ranks=[0, ],
         )
         trainer.train(metric_types=["e2e_iter_time", "mfu", ])
+    
+    # @unittest.skip("Pass.")
+    def test_multimodal_tflops(self):
+        """ Calculate the TFLOPs of multimodal encoders and the LLM backbone. """
+
+        from crius.tools.mfu_logger import MFULogger, MFULoggerModelConfig
+
+        ratio = (0.4, 0.4, 0.2) # image, audio, text
+        batch_size = 32
+        seq_len = 16384
+        num_text_tokens = 128
+
+        patch_size = 14
+        img_h = 896
+        img_w = 896
+        in_channels = 3
+        num_image_tokens = (img_h // patch_size) * (img_w // patch_size)    # 4096
+
+        conformer_conv_kernel_size = 5
+        conformer_conv_stride = 1
+        num_audio_frames = 1000
+        audio_dim = 80
+        num_audio_tokens = (num_audio_frames - conformer_conv_kernel_size) // conformer_conv_stride + 1 # 996
+
+        weighted_multimodal_token_num = ratio[2] * num_text_tokens + ratio[0] * num_image_tokens // 4 + ratio[1] * num_audio_tokens // 16
+        num_samples = batch_size * seq_len / weighted_multimodal_token_num
+        num_image_samples = num_samples * ratio[0]
+        num_audio_samples = num_samples * ratio[1]
+        num_text_samples = num_samples * ratio[2]
+
+        # ViT1B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=40,
+            hidden_size=1408,
+            ffn_hidden_size=6144,
+            num_attention_heads=16,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+
+        tflops_vit1b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_image_samples,
+            sequence_length=num_image_tokens,
+        ) / 1e12
+        # Conv layer for patch embedding
+        tflops_vit1b += (
+            2 * (
+                patch_size * patch_size * in_channels
+            ) * (img_h // patch_size) * (img_w // patch_size) * mfu_logger_config.hidden_size
+        ) * num_image_samples / 1e12
+
+        print(f"ViT-1B TFLOPs: {tflops_vit1b}")
+        print(f"Per-token ViT-1B TFLOPs: {tflops_vit1b / (num_image_samples * num_image_tokens)}")
+
+        # USM Conformer-2B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=32,
+            hidden_size=1536,
+            ffn_hidden_size=1536 * 4,
+            num_attention_heads=16,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+        tflops_conformer_06b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_audio_samples,
+            sequence_length=num_audio_tokens,
+        ) / 1e12
+        # Dense layer to project audio features to hidden size
+        tflops_conformer_06b += (
+            2 * audio_dim * mfu_logger_config.hidden_size * num_audio_tokens
+        ) * num_audio_samples / 1e12
+        # Conv layer for each conformer layer
+        tflops_conformer_06b += (
+            2 * (
+                conformer_conv_kernel_size * conformer_conv_kernel_size * mfu_logger_config.hidden_size
+            ) * num_audio_tokens * mfu_logger_config.hidden_size * mfu_logger_config.num_layers
+        ) * num_audio_samples / 1e12
+
+        print(f"USM Conformer-0.6B TFLOPs: {tflops_conformer_06b}")
+        print(f"Per-token USM Conformer-0.6B TFLOPs: {tflops_conformer_06b / (num_audio_samples * num_audio_tokens)}")
+
+        # LLaMA12B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=36,
+            hidden_size=5120,
+            ffn_hidden_size=13824,
+            num_attention_heads=40,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+        tflops_llama12b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_samples,
+            sequence_length=weighted_multimodal_token_num,
+        ) / 1e12
+
+        print(f"LLaMA-12B TFLOPs: {tflops_llama12b}")
+        print(f"Per-token LLaMA-12B TFLOPs: {tflops_llama12b / (num_samples * weighted_multimodal_token_num)}")
+
+
+
+
+
 
 
 if __name__ == '__main__':

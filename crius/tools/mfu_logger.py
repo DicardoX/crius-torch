@@ -28,7 +28,7 @@ class MFULoggerModelConfig:
     num_attention_heads: int = None
     """ Number of attention heads. """
 
-    hidden_size:int = None
+    hidden_size: int = None
     """ Transformer hidden size. """
 
     num_query_groups: Optional[int] = None
