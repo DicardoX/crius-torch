@@ -83,6 +83,7 @@ class ParallelTuneTest(unittest.TestCase):
         proto_parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
             num_layers=num_layers,
+            num_attn_heads=num_attention_heads,
             num_microbatches=num_micro_batches,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
