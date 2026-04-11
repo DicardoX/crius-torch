@@ -310,9 +310,12 @@ class DotProductAttention(MegatronModule):
         # preallocting input tensor: [b * np, sq, sk]
         # Megatron's global memory buffer is located on cuda device by default
         # We need to explicitly overwrite this buffer ouside model definition
-        matmul_input_buffer = parallel_state.get_global_memory_buffer().get_tensor(
-            (output_size[0] * output_size[1], output_size[2], output_size[3]), query.dtype, "mpu"
-        )
+        # matmul_input_buffer = parallel_state.get_global_memory_buffer().get_tensor(
+        #     (output_size[0] * output_size[1], output_size[2], output_size[3]), query.dtype, "mpu"
+        # )
+        matmul_input_buffer = torch.empty(
+            (output_size[0] * output_size[1], output_size[2], output_size[3]), 
+            dtype=query.dtype, device=global_configs.current_device)
 
         # Raw attention scores. [b * np, sq, sk]
         matmul_result = torch.baddbmm(
