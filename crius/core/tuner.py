@@ -94,7 +94,7 @@ class CriusParallelTuner:
         print(optimal_plan)
         print(least_e2e_latency)
 
-        exit(0)
+        return optimal_plan, least_e2e_latency
     
     def _enumerate_grids(self, force_power_of_two: bool = True):
         """ Enumerate all candidate grids. 
