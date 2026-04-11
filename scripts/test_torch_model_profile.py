@@ -682,7 +682,23 @@ class TorchModelProfileTest(unittest.TestCase):
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
-        trainer.train(metric_types=["e2e_iter_time", "mfu", ])
+        _, e2e_iter_time = trainer.train(metric_types=["e2e_iter_time", "mfu", ])
+
+        print(f"\n\n\n================================")
+        print(f"=     Optimization results     =")
+        print(f"================================")
+        print(f"\n====> Optimal parallelism plan:")
+        print(f"\n - Tensor parallel degree: {global_configs.tensor_model_parallel_size}")
+        print(f"\n - Data parallel degree: {global_configs.data_parallel_degree}")
+        print(f"\n - Pipeline parallel degree (i.e., number of pipeline stages): {[num_layers]}")
+        print(f"\n - Pipeline stage partition ('x' denotes a single transformer layer):")
+        stage_names = f"Stage {0} ({num_layers} layers)"
+        str_ = f"[{' '.join(['x' for _ in range(num_layers)])}]"
+        print(f"\n   {stage_names}")
+        print(f"   {str_}")
+
+        print(f"\n====> Latency of the parallelism plan (ms):")
+        print(f"\n - {e2e_iter_time}")
 
     @unittest.skip("Pass.")
     def test_meagtron_ground_truth_moe(self):

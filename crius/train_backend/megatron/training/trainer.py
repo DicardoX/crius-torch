@@ -263,7 +263,7 @@ class Trainer:
                     log_level="info",
                 )
 
-        return tr_losses
+        return tr_losses, np.mean(e2e_iter_times)
 
     def _maybe_unscale_grad(self) -> None:
         """ Unscale gradient if gradient scaler is enabled. """
