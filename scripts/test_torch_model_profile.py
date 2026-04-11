@@ -552,7 +552,7 @@ class TorchModelProfileTest(unittest.TestCase):
         num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 32
+        num_layers = 16
         dtype = torch.float16
         device = "mlu"
         vocab_size = 50000
