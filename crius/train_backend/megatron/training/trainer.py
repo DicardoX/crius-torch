@@ -219,6 +219,8 @@ class Trainer:
                 logger=logger,
                 log_level="info",
             )
+
+            time.sleep(1)
         
         if self.use_pytorch_profiler:
             prof.stop()
