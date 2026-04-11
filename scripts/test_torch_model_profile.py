@@ -84,7 +84,7 @@ class TorchModelProfileTest(unittest.TestCase):
             export NCCL_IB_DISABLE=1
     """
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_one_torch_operator(self):
         """ Profile one torch operator in a hackable manner. """
 
@@ -238,14 +238,14 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = latency_tensor.item() / torchrun_world_size # Use the average latency across ranks.
         print(f"Average operator latency across ranks: {(op_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
             min_batch_size=2,
-            max_batch_size=4,
+            max_batch_size=16,
             batch_size_step="power-of-2",
             # min_seq_len=1024,
             # max_seq_len=2048,
@@ -253,7 +253,7 @@ class TorchModelProfileTest(unittest.TestCase):
             max_seq_len=2048,
             seq_len_step="power-of-2",
             dtype=torch.float16,
-            device="cuda",
+            device="mlu",
             num_warmup_steps=5,
             num_profile_steps=10,
             force_overwrite=True,
@@ -262,13 +262,14 @@ class TorchModelProfileTest(unittest.TestCase):
             use_megatron_attention_softmax_in_fp32=True,
             use_many_to_many_p2p_offline_data=True,
             many_to_many_p2p_rank_mapping={
-                0: 2, 1: 3,
-                2: 0, 3: 1,
+                0: 1, 1: 0, 
+                # 0: 2, 1: 3,
+                # 2: 0, 3: 1,
                 # 0: 4, 1: 5, 2: 6, 3: 7,     # Node 0
                 # 4: 0, 5: 1, 6: 2, 7: 3,     # Node 1
             },
-            many_to_many_sender_ranks=[0, 1],
-            many_to_many_recver_ranks=[2, 3],
+            many_to_many_sender_ranks=[0, ],
+            many_to_many_recver_ranks=[1, ],
             gemm_left_op_hidden_dims=[      # Only consider forward ops
                 256, 512, 1024, 2048, 4096, 8192, 16384, 
             ],
@@ -314,16 +315,16 @@ class TorchModelProfileTest(unittest.TestCase):
             data_filename='prof_data.pkl',
         )
 
-        # offline_profiler.profile(opcode="gemm")
-        # offline_profiler.profile(opcode="bmm")
-        # offline_profiler.profile(opcode="baddbmm")
-        # offline_profiler.profile(opcode="layernorm")
-        # offline_profiler.profile(opcode="dropout")
-        # offline_profiler.profile(opcode="masked_fill_")
-        # offline_profiler.profile(opcode="softmax")
+        offline_profiler.profile(opcode="gemm")
+        offline_profiler.profile(opcode="bmm")
+        offline_profiler.profile(opcode="baddbmm")
+        offline_profiler.profile(opcode="layernorm")
+        offline_profiler.profile(opcode="dropout")
+        offline_profiler.profile(opcode="masked_fill_")
+        offline_profiler.profile(opcode="softmax")
 
         # offline_profiler.profile(opcode="all_reduce")
-        offline_profiler.profile(opcode="p2p")
+        # offline_profiler.profile(opcode="p2p")
 
     @unittest.skip("Pass.")
     def test_device_free_profiling(self):
