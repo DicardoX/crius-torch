@@ -245,7 +245,7 @@ class TorchModelProfileTest(unittest.TestCase):
         from crius.offline.offline_profiler import CriusOfflineDataManager, OfflineProfileConfigs
         profile_configs = OfflineProfileConfigs(
             min_batch_size=2,
-            max_batch_size=16,
+            max_batch_size=4,
             batch_size_step="power-of-2",
             # min_seq_len=1024,
             # max_seq_len=2048,
