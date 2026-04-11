@@ -48,12 +48,12 @@ class ParallelTuneTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 8
-        seq_len = 1024
-        num_micro_batches = 2
+        global_bs = 2
+        seq_len = 256
+        num_micro_batches = 1
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 16
+        num_layers = 32
         data_dtype = torch.long
         dtype = torch.float16
         # device = "cuda"
