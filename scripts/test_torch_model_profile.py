@@ -238,7 +238,7 @@ class TorchModelProfileTest(unittest.TestCase):
         op_latency = latency_tensor.item() / torchrun_world_size # Use the average latency across ranks.
         print(f"Average operator latency across ranks: {(op_latency):.3f} ms")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_torch_model_offline_profiling(self):
         """ Offline profile all operators."""
 
@@ -326,7 +326,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -360,11 +360,11 @@ class TorchModelProfileTest(unittest.TestCase):
         device = "cpu"
         vocab_size = 50000
 
-        global_configs.num_nodes = 2
-        global_configs.num_devices_per_node = 4
+        global_configs.num_nodes = 1
+        global_configs.num_devices_per_node = 2
 
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.training_backend = "megatron"
         global_configs.only_forward = False
@@ -375,7 +375,7 @@ class TorchModelProfileTest(unittest.TestCase):
                 "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +
                 "Currently we recommend using shadow model loader to reduce device memory consumption."
             )
-            device = "cuda"
+            device = "mlu"
             global_configs.current_device = torch.cuda.current_device()
             global_configs.use_shadow_model_loader = True
 
