@@ -689,7 +689,7 @@ class TorchModelProfileTest(unittest.TestCase):
         print(f"================================")
         print(f"\n====> Optimal parallelism plan:")
         print(f"\n - Tensor parallel degree: {global_configs.tensor_model_parallel_size}")
-        print(f"\n - Data parallel degree: {global_configs.data_parallel_degree}")
+        print(f"\n - Data parallel degree: {global_configs.data_parallel_size}")
         print(f"\n - Pipeline parallel degree (i.e., number of pipeline stages): {[num_layers]}")
         print(f"\n - Pipeline stage partition ('x' denotes a single transformer layer):")
         stage_names = f"Stage {0} ({num_layers} layers)"
