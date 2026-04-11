@@ -220,7 +220,7 @@ class Trainer:
                 log_level="info",
             )
 
-            time.sleep(1)
+            time.sleep(2)
         
         if self.use_pytorch_profiler:
             prof.stop()
