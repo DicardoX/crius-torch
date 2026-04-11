@@ -48,9 +48,9 @@ class ParallelTuneTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 2
+        global_bs = 4
         seq_len = 256
-        num_micro_batches = 1
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
