@@ -326,7 +326,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # offline_profiler.profile(opcode="all_reduce")
         # offline_profiler.profile(opcode="p2p")
 
-    # @unittest.skip("Pass.")
+    @unittest.skip("Pass.")
     def test_device_free_profiling(self):
         """ Profile a Megatron model in a device-free manner. """
 
@@ -514,7 +514,7 @@ class TorchModelProfileTest(unittest.TestCase):
 
         print(f"\n=======> Estimated end-to-end latency: {(e2e_latency):.3f} ms")
 
-    @unittest.skip("Pass.")
+    # @unittest.skip("Pass.")
     def test_meagtron_ground_truth_gpt(self):
         """ Run the parallelized Megatron model as the ground truth, using Megatron's parallelization codes. """
 
@@ -522,6 +522,7 @@ class TorchModelProfileTest(unittest.TestCase):
         # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
         # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.training.arguments import core_transformer_config_from_args
         from megatron.core.transformer.transformer_config import TransformerConfig
         from megatron.core import mpu, tensor_parallel
         from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
