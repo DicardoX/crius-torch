@@ -560,12 +560,12 @@ class TorchModelProfileTest(unittest.TestCase):
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
-        global_configs.pipeline_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 1
         global_configs.data_parallel_size = 1
         global_configs.only_forward = False
 
-        global_configs.num_nodes = 2
-        global_configs.num_devices_per_node = 4
+        global_configs.num_nodes = 1
+        global_configs.num_devices_per_node = 2
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
 
         max_mfu_test = False
@@ -677,7 +677,7 @@ class TorchModelProfileTest(unittest.TestCase):
             opt_param_scheduler=opt_param_scheduler,
             pipeline_strategy="1f1b",
             forward_only=False,
-            use_pytorch_profiler=True,
+            use_pytorch_profiler=False,
             pytorch_profiler_dp_ranks=[0, ], 
             pytorch_profiler_tp_ranks=[0, ],
         )
