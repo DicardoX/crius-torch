@@ -554,7 +554,7 @@ class TorchModelProfileTest(unittest.TestCase):
         num_attention_heads = 32
         num_layers = 32
         dtype = torch.float16
-        device = "cuda"
+        device = "mlu"
         vocab_size = 50000
         num_iters = 5
         
@@ -567,6 +567,7 @@ class TorchModelProfileTest(unittest.TestCase):
         global_configs.num_nodes = 1
         global_configs.num_devices_per_node = 2
         global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
+        global_configs.current_device = device
 
         max_mfu_test = False
         virtual_pipeline_model_parallel_size = None
