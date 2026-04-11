@@ -48,12 +48,12 @@ class ParallelTuneTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
+        global_bs = 8
         seq_len = 1024
-        num_micro_batches = 4
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
-        num_layers = 4
+        num_layers = 16
         data_dtype = torch.long
         dtype = torch.float16
         # device = "cuda"
@@ -70,7 +70,7 @@ class ParallelTuneTest(unittest.TestCase):
                 "Shape propagation currently hangs in CPU mode, or prabably due to extremely slow progagation. " +
                 "Currently we recommend using shadow model loader to reduce device memory consumption."
             )
-            device = "cuda"
+            device = "mlu"
             global_configs.current_device = torch.cuda.current_device()
             global_configs.use_shadow_model_loader = True
 
