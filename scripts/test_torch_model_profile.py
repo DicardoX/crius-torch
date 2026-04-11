@@ -547,16 +547,16 @@ class TorchModelProfileTest(unittest.TestCase):
             return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
 
         model_type = ModelType.GPT
-        global_bs = 2
+        global_bs = 4
         seq_len = 256
-        num_micro_batches = 1
+        num_micro_batches = 2
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 32
         dtype = torch.float16
         device = "mlu"
         vocab_size = 50000
-        num_iters = 5
+        num_iters = 10
         
         global_configs.training_backend = "megatron"
         global_configs.tensor_model_parallel_size = 2
