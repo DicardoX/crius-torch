@@ -27,14 +27,14 @@ torchrun \
     --seq-len "$SEQ_LEN"
 
 
-# torchrun \
-#     --nproc-per-node="$NUM_GPUS" \
-#     scripts/bench_megatron.py \
-#     --tp-degree "$TP_DEGREE" \
-#     --pp-degree "$PP_DEGREE" \
-#     --dp-degree "$DP_DEGREE" \
-#     --batch-size "$BATCH_SIZE" \
-#     --seq-len "$SEQ_LEN"
+torchrun \
+    --nproc-per-node="$NUM_GPUS" \
+    scripts/bench_megatron.py \
+    --tp-degree "$TP_DEGREE" \
+    --pp-degree "$PP_DEGREE" \
+    --dp-degree "$DP_DEGREE" \
+    --batch-size "$BATCH_SIZE" \
+    --seq-len "$SEQ_LEN"
 
 
 if [ $? -eq 0 ]; then
