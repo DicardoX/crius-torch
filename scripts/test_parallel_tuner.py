@@ -83,6 +83,7 @@ class ParallelTuneTest(unittest.TestCase):
         proto_parallelism_plan = ParallelismPlan(
             pipeline_type="1f1b",
             num_layers=num_layers,
+            num_attn_heads=num_attention_heads,
             num_microbatches=num_micro_batches,
             pipeline_stage_partition_method=pipeline_stage_partition_method,
             pipeline_use_boundary_markers=pipeline_use_boundary_markers,
@@ -184,7 +185,27 @@ class ParallelTuneTest(unittest.TestCase):
             grid_plan_optimization_mode="all",
             profiled_data_path='./crius/offline/prof_data.pkl',
         )
-        tuner.tune(input_args, input_kwargs)
+        optimal_plan, least_e2e_latency = tuner.tune(input_args, input_kwargs)
+
+        print(f"\n\n\n================================")
+        print(f"=     Optimization results     =")
+        print(f"================================")
+        print(f"\n====> Optimal parallelism plan:")
+        print(f"\n - Tensor parallel degree: {optimal_plan.tensor_parallel_degree}")
+        print(f"\n - Data parallel degree: {optimal_plan.data_parallel_degree}")
+        print(f"\n - Pipeline parallel degree (i.e., number of pipeline stages): {len(optimal_plan.pipeline_num_layers_per_stage)}")
+        print(f"\n - Pipeline stage partition ('x' denotes a single transformer layer):")
+        stage_names = [f"Stage {i+1} ({optimal_plan.pipeline_num_layers_per_stage[i]} layers)" for i in range(len(optimal_plan.pipeline_num_layers_per_stage))]
+        name_line = " | ".join(stage_names)
+        str_ = ""
+        for i, n in enumerate(optimal_plan.pipeline_num_layers_per_stage):
+            str_ = str_ + f"[{' '.join(['x' for _ in range(n)])}] | " if i < len(optimal_plan.pipeline_num_layers_per_stage) - 1 else str_ + f"[{' '.join(['x' for _ in range(n)])}]"
+        print("   ", name_line)
+        print("   ", str_)
+        print(f"\n - Metadata: {optimal_plan}")
+
+        print(f"\n====> Latency of the optimal plan (ms):")
+        print(f"\n - {least_e2e_latency}")
 
 
 if __name__ == '__main__':

@@ -89,6 +89,7 @@ class CriusParallelPlanner:
                     self._proto_plan.pipeline_type,
                     pipeline_parallel_degree=pp,
                     num_layers=self._proto_plan.num_layers,
+                    num_attn_heads=self._proto_plan.num_attn_heads,
                     num_microbatches=self._proto_plan.num_microbatches,
                     tensor_parallel_degree=tp,
                     data_parallel_degree=dp,
