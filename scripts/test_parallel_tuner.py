@@ -20,6 +20,22 @@ from crius.core.tuner import CriusParallelTuner
 from crius.global_envs import global_configs, logger
 
 
+def _get_positive_int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}.") from exc
+
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {parsed}.")
+
+    return parsed
+
+
 class ParallelTuneTest(unittest.TestCase):
     """ Parallelism optimization test cases. 
     
@@ -48,9 +64,14 @@ class ParallelTuneTest(unittest.TestCase):
             """ Model provider function. """
             return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
 
-        global_bs = 16
-        seq_len = 1024
+        global_bs = _get_positive_int_env("CRIUS_TEST_BATCH_SIZE", 16)
+        seq_len = _get_positive_int_env("CRIUS_TEST_SEQ_LEN", 1024)
         num_micro_batches = 4
+        if global_bs % num_micro_batches != 0:
+            raise ValueError(
+                f"Global batch size {global_bs} must be divisible by num_micro_batches {num_micro_batches}."
+            )
+
         hidden_size = 4096
         num_attention_heads = 32
         num_layers = 4

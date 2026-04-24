@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+
+import argparse
+from typing import Any
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Benchmark Crius parallel tuner for a Megatron GPT workload."
+    )
+    parser.add_argument("--num_gpus", "--num-gpus", dest="num_gpus", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--seq-len", type=int, required=True)
+    parser.add_argument("--num-micro-batches", type=int, default=4)
+    parser.add_argument("--hidden-size", type=int, default=4096)
+    parser.add_argument("--num-attention-heads", type=int, default=32)
+    parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--vocab-size", type=int, default=50000)
+    parser.add_argument("--profiled-data-path", default="./crius/offline/prof_data.pkl")
+    return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    positive_int_args = (
+        "num_gpus",
+        "batch_size",
+        "seq_len",
+        "num_micro_batches",
+        "hidden_size",
+        "num_attention_heads",
+        "num_layers",
+        "vocab_size",
+    )
+    for name in positive_int_args:
+        value = getattr(args, name)
+        if value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be a positive integer, got {value}.")
+
+    if args.batch_size % args.num_micro_batches != 0:
+        raise ValueError(
+            f"batch-size ({args.batch_size}) must be divisible by "
+            f"num-micro-batches ({args.num_micro_batches})."
+        )
+
+
+def main() -> int:
+    args = parse_args()
+    validate_args(args)
+
+    import torch
+    from torch import nn
+
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    from crius.core.tuner import CriusParallelTuner
+    from crius.global_envs import global_configs, logger
+    from crius.loader import ModelLoader, ShadowModelLoader
+    from crius.model_parallel.utils import ParallelismPlan
+    from crius.train_backend.megatron.gpt_model import GPTModel
+    from crius.train_backend.megatron.utils import initialize_virtual_distributed
+
+    def model_provider(
+        hidden_size: int,
+        num_layers: int,
+        max_seq_len: int,
+        vocab_size: int,
+        device: str,
+        dtype: torch.dtype,
+        megatron_config: Any = None,
+    ) -> nn.Module:
+        return GPTModel(megatron_config, vocab_size, max_seq_len, device=device)
+
+    global_bs = args.batch_size
+    seq_len = args.seq_len
+    num_micro_batches = args.num_micro_batches
+    micro_batch_size = global_bs // num_micro_batches
+    data_dtype = torch.long
+    dtype = torch.float16
+    device = "cpu"
+
+    global_configs.num_nodes = 1
+    global_configs.num_devices_per_node = args.num_gpus
+    global_configs.training_backend = "megatron"
+    global_configs.only_forward = False
+    global_configs.enable_backward_graph_generation = True
+    global_configs.micro_batch_size = micro_batch_size
+    global_configs.sequence_length = seq_len
+    global_configs.hidden_size = args.hidden_size
+
+    if device == "cpu":
+        logger.warning(
+            "Shape propagation currently hangs in CPU mode, or is probably extremely slow. "
+            "Using shadow model loader with a CUDA fake device."
+        )
+        device = "cuda"
+        global_configs.current_device = torch.cuda.current_device()
+        global_configs.use_shadow_model_loader = True
+
+    proto_parallelism_plan = ParallelismPlan(
+        pipeline_type="1f1b",
+        num_layers=args.num_layers,
+        num_attn_heads=args.num_attention_heads,
+        num_microbatches=num_micro_batches,
+        pipeline_stage_partition_method="auto",
+        pipeline_use_boundary_markers=True,
+        pipeline_boundary_start_marker=["input_layernorm"],
+        pipeline_boundary_end_marker=["final_layernorm"],
+    )
+
+    global_configs.comm_op_insert_rules = {
+        "all_reduce:tp:forward": {
+            "after_markers": ["self_attention_linear_proj_weight", "mlp_linear_fc2_weight"],
+            "after_nodes": ["contiguous"],
+            "interval": 1,
+            "pass": "forward",
+            "parallelism": "tp",
+        },
+        "all_reduce:dp:backward": {
+            "after_markers": [],
+            "after_nodes": ["weight_grad"],
+            "interval": 1,
+            "pass": "backward",
+            "parallelism": "dp",
+        },
+        "all_reduce:tp:backward": {
+            "after_markers": [],
+            "after_nodes": ["weight_grad"],
+            "skip_first_n": 4,
+            "interval": 4,
+            "pass": "backward",
+            "parallelism": "tp",
+        },
+    }
+
+    initialize_virtual_distributed(
+        num_nodes=global_configs.num_nodes,
+        num_devices_per_node=global_configs.num_devices_per_node,
+        init_cpu_process_group=True,
+    )
+    model_parallel_cuda_manual_seed(1234)
+
+    megatron_config = TransformerConfig(
+        num_layers=args.num_layers,
+        hidden_size=args.hidden_size,
+        num_attention_heads=args.num_attention_heads,
+        params_dtype=dtype,
+        pipeline_dtype=dtype,
+        fp16=True,
+    )
+    setattr(megatron_config, "max_sequence_length", seq_len)
+    setattr(megatron_config, "vocab_size", args.vocab_size)
+    setattr(megatron_config, "microbatch_size", micro_batch_size)
+
+    model_loader_class = ShadowModelLoader if global_configs.use_shadow_model_loader else ModelLoader
+    loader_kwargs = (
+        {"fake_device_str": device}
+        if global_configs.use_shadow_model_loader
+        else {"device_str": device}
+    )
+    model_loader = model_loader_class(
+        model_provider=model_provider,
+        model_kwargs={
+            "hidden_size": args.hidden_size,
+            "num_layers": args.num_layers,
+            "max_seq_len": seq_len,
+            "vocab_size": args.vocab_size,
+            "device": device,
+            "dtype": dtype,
+            "megatron_config": megatron_config,
+        },
+        **loader_kwargs,
+    )
+    model = model_loader.load()
+
+    input_ids = torch.ones(micro_batch_size, seq_len, dtype=data_dtype, device=device)
+    position_ids = torch.arange(seq_len, dtype=data_dtype, device=device).unsqueeze(0).expand_as(input_ids)
+    attention_mask = torch.ones(
+        micro_batch_size,
+        1,
+        seq_len,
+        seq_len,
+        dtype=torch.bool,
+        device=device,
+    )
+    input_args = ()
+    input_kwargs = {
+        "input_ids": input_ids,
+        "position_ids": position_ids,
+        "attention_mask": attention_mask,
+        "decoder_input": None,
+        "labels": torch.ones(micro_batch_size, seq_len, dtype=data_dtype, device=device),
+    }
+
+    tuner = CriusParallelTuner(
+        model=model,
+        num_nodes=global_configs.num_nodes,
+        num_devices_per_node=global_configs.num_devices_per_node,
+        proto_parallelism_plan=proto_parallelism_plan,
+        grid_plan_optimization_mode="all",
+        profiled_data_path=args.profiled_data_path,
+    )
+    optimal_plan, least_e2e_latency = tuner.tune(input_args, input_kwargs)
+
+    print("\n\n================================")
+    print("=        Crius benchmark       =")
+    print("================================")
+    print(f"\n - GPU count per node: {args.num_gpus}")
+    print(f"\n - Batch size: {global_bs}")
+    print(f"\n - Micro batch size: {micro_batch_size}")
+    print(f"\n - Sequence length: {seq_len}")
+    print("\n====> Optimal parallelism plan:")
+    print(f"\n - Tensor parallel degree: {optimal_plan.tensor_parallel_degree}")
+    print(f"\n - Data parallel degree: {optimal_plan.data_parallel_degree}")
+    print(
+        "\n - Pipeline parallel degree "
+        f"(i.e., number of pipeline stages): {len(optimal_plan.pipeline_num_layers_per_stage)}"
+    )
+    print(f"\n - Pipeline stage partition: {optimal_plan.pipeline_num_layers_per_stage}")
+    print(f"\n - Estimated latency (ms): {least_e2e_latency}")
+    print(f"\n - Metadata: {optimal_plan}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
