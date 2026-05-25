@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+
+import argparse
+import os
+from functools import partial
+from typing import Any
+
+
+def enable_mlu_backend() -> None:
+    try:
+        import torch_mlu  # noqa: F401
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch_mlu":
+            raise
+
+
+def default_peak_fp16_tflops() -> float:
+    return float(os.environ.get("MLU_PEAK_FP16_TFLOPS", "149.7"))
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Benchmark Megatron GPT ground-truth training with the requested parallelism."
+    )
+    parser.add_argument("--tp-degree", type=int, required=True)
+    parser.add_argument("--pp-degree", type=int, required=True)
+    parser.add_argument("--dp-degree", type=int, required=True)
+    parser.add_argument("--batch-size", type=int, required=True)
+    parser.add_argument("--seq-len", type=int, required=True)
+    parser.add_argument("--num-micro-batches", type=int, default=2)
+    parser.add_argument("--hidden-size", type=int, default=4096)
+    parser.add_argument("--num-attention-heads", type=int, default=32)
+    parser.add_argument("--num-layers", type=int, default=8)
+    parser.add_argument("--vocab-size", type=int, default=50000)
+    parser.add_argument("--num-iters", type=int, default=5)
+    parser.add_argument("--num-nodes", type=int, default=1)
+    parser.add_argument(
+        "--peak-fp16-tflops",
+        type=float,
+        default=default_peak_fp16_tflops(),
+        help="Per-MLU peak FP16 TFLOPS used for MFU. Defaults to MLU_PEAK_FP16_TFLOPS or 149.7.",
+    )
+    parser.add_argument("--forward-only", action="store_true")
+    return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    positive_int_args = (
+        "tp_degree",
+        "pp_degree",
+        "dp_degree",
+        "batch_size",
+        "seq_len",
+        "num_micro_batches",
+        "hidden_size",
+        "num_attention_heads",
+        "num_layers",
+        "vocab_size",
+        "num_iters",
+        "num_nodes",
+    )
+    for name in positive_int_args:
+        value = getattr(args, name)
+        if value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be a positive integer, got {value}.")
+    if args.peak_fp16_tflops <= 0:
+        raise ValueError(f"--peak-fp16-tflops must be positive, got {args.peak_fp16_tflops}.")
+
+    world_size = int(os.environ.get("WORLD_SIZE", "0"))
+    expected_world_size = args.tp_degree * args.pp_degree * args.dp_degree
+    if world_size and world_size != expected_world_size:
+        raise ValueError(
+            "WORLD_SIZE must equal tp-degree * pp-degree * dp-degree, "
+            f"got WORLD_SIZE={world_size}, expected {expected_world_size}."
+        )
+    if args.batch_size % args.num_micro_batches != 0:
+        raise ValueError(
+            f"batch-size ({args.batch_size}) must be divisible by "
+            f"num-micro-batches ({args.num_micro_batches})."
+        )
+    micro_batch_size = args.batch_size // args.num_micro_batches
+    if args.batch_size % (micro_batch_size * args.dp_degree) != 0:
+        raise ValueError(
+            f"batch-size ({args.batch_size}) must be divisible by "
+            f"micro-batch-size ({micro_batch_size}) * dp-degree ({args.dp_degree})."
+        )
+    if args.num_attention_heads % args.tp_degree != 0:
+        raise ValueError(
+            f"num-attention-heads ({args.num_attention_heads}) must be divisible by "
+            f"tp-degree ({args.tp_degree})."
+        )
+    if args.num_layers % args.pp_degree != 0:
+        raise ValueError(
+            f"num-layers ({args.num_layers}) must be divisible by pp-degree ({args.pp_degree})."
+        )
+
+
+def main() -> int:
+    args = parse_args()
+    validate_args(args)
+
+    import torch
+    from torch import nn
+
+    enable_mlu_backend()
+
+    from megatron.core import mpu
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+    from megatron.core.transformer.transformer_config import TransformerConfig
+    from megatron.core.utils import get_attr_wrapped_model
+
+    from crius.global_envs import global_configs
+    from crius.train_backend.megatron.gpt_model import GPTModel
+    from crius.train_backend.megatron.training.trainer import ModelType, Trainer
+    from crius.train_backend.megatron.training.utils import (
+        get_input_batch,
+        get_optimizer_and_scheduler,
+        get_train_data_iterator,
+        setup_model,
+    )
+    from crius.train_backend.megatron.utils import initialize_distributed
+
+    def model_provider(
+        megatron_config: Any,
+        max_seq_len: int,
+        vocab_size: int,
+        device: str,
+    ) -> nn.Module:
+        pre_process = mpu.is_pipeline_first_stage()
+        post_process = mpu.is_pipeline_last_stage()
+        return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
+
+    model_type = ModelType.GPT
+    global_bs = args.batch_size
+    seq_len = args.seq_len
+    num_micro_batches = args.num_micro_batches
+    dtype = torch.float16
+    device = "mlu"
+    global_configs.training_backend = "megatron"
+    global_configs.current_device = torch.device(device)
+    global_configs.tensor_model_parallel_size = args.tp_degree
+    global_configs.pipeline_model_parallel_size = args.pp_degree
+    global_configs.data_parallel_size = args.dp_degree
+    global_configs.only_forward = args.forward_only
+    global_configs.num_nodes = args.num_nodes
+    global_configs.num_devices_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", os.environ.get("WORLD_SIZE", "1")))
+    global_configs.peak_fp16_tflops = args.peak_fp16_tflops
+
+    virtual_pipeline_model_parallel_size = None
+    overlap_p2p_comm = False
+    batch_p2p_sync = True
+
+    micro_batch_size = global_bs // num_micro_batches
+    assert global_bs % (micro_batch_size * global_configs.data_parallel_size) == 0, (
+        f"Global batch size {global_bs} must be divisible by micro-batch-size {micro_batch_size} "
+        f"x data parallel size {global_configs.data_parallel_size}."
+    )
+    num_micro_batches = global_bs // (micro_batch_size * global_configs.data_parallel_size)
+    global_bs = micro_batch_size * num_micro_batches
+
+    initialize_distributed(
+        tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+        pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+    )
+    model_parallel_cuda_manual_seed(1234)
+
+    megatron_config = TransformerConfig(
+        tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+        pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+        virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+        num_layers=args.num_layers,
+        hidden_size=args.hidden_size,
+        num_attention_heads=args.num_attention_heads,
+        params_dtype=dtype,
+        pipeline_dtype=dtype,
+        fp16=(dtype == torch.float16),
+        overlap_p2p_comm=overlap_p2p_comm,
+        batch_p2p_sync=batch_p2p_sync,
+    )
+
+    setattr(megatron_config, "global_batch_size", global_bs)
+    setattr(megatron_config, "vocab_size", args.vocab_size)
+    setattr(megatron_config, "num_micro_batches", num_micro_batches)
+    setattr(megatron_config, "sequence_length", seq_len)
+    setattr(megatron_config, "num_iters", args.num_iters)
+    setattr(megatron_config, "dtype", dtype)
+
+    model = model_provider(
+        megatron_config=megatron_config,
+        max_seq_len=seq_len,
+        vocab_size=args.vocab_size,
+        device=device,
+    )
+    model = setup_model(model)
+
+    train_data_iterator = get_train_data_iterator(
+        args.vocab_size,
+        global_bs,
+        num_micro_batches,
+        seq_len,
+        num_iters=args.num_iters,
+    )
+    optimizer, opt_param_scheduler = get_optimizer_and_scheduler(
+        model,
+        global_bs,
+        args.num_iters,
+        fp16=(dtype == torch.float16),
+        params_dtype=dtype,
+    )
+
+    def forward_step_func(data_iterator, model):
+        def loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
+            losses = output_tensor.float()
+            loss_mask_ = loss_mask.view(-1).float()
+            loss = torch.sum(losses.view(-1) * loss_mask_) / loss_mask_.sum()
+            return loss, {"lm loss": loss}
+
+        config = get_attr_wrapped_model(model, attr="config")
+        tokens, labels, loss_mask, attention_mask, position_ids = get_input_batch(
+            data_iterator=data_iterator,
+            micro_batch_size=(config.global_batch_size // config.num_micro_batches),
+            seq_len=config.sequence_length,
+            pipeline_model_parallel_size=config.pipeline_model_parallel_size,
+        )
+        output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+        return output_tensor, partial(loss_func, loss_mask)
+
+    trainer = Trainer(
+        megatron_transformer_config=megatron_config,
+        forward_step_func=forward_step_func,
+        model=model,
+        model_type=model_type,
+        train_data_iterator=train_data_iterator,
+        optimizer=optimizer,
+        opt_param_scheduler=opt_param_scheduler,
+        pipeline_strategy="1f1b",
+        forward_only=args.forward_only,
+        use_pytorch_profiler=False,
+        pytorch_profiler_dp_ranks=[0],
+        pytorch_profiler_tp_ranks=[0],
+    )
+    trainer.train(metric_types=["e2e_iter_time", "mfu"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

@@ -133,7 +133,7 @@ class Trainer:
                 model_chunk.zero_grad_buffer()  # Defined in `DistributedDataParallel`
             self.optimizer.zero_grad()
         
-        self.timer.start("train_step", use_cuda_event=True)
+        self.timer.start("train_step", use_cuda_event=False)
 
         # Forward-backward pass
         assert self.forward_backward_func is not None, \
@@ -153,7 +153,7 @@ class Trainer:
         
         # FIXME(chunyu): Currently we only consider forward-backward computation without
         # other processes such as optimizer step.
-        self.timer.stop("train_step", use_cuda_event=True)
+        self.timer.stop("train_step", use_cuda_event=False)
 
         # Unscale grad
         self._maybe_unscale_grad()

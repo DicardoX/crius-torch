@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [ "$#" -ne 6 ]; then
+    echo "Usage: $0 <num_mlus> <batch_size> <seq_len> <tp_degree> <pp_degree> <dp_degree>"
+    exit 1
+fi
+
+NUM_MLUS=$1
+BATCH_SIZE=$2
+SEQ_LEN=$3
+TP_DEGREE=$4
+PP_DEGREE=$5
+DP_DEGREE=$6
+TUNER_ENV_FILE=$(mktemp "${TMPDIR:-/tmp}/crius_parallel_tuner.XXXXXX")
+
+cleanup() {
+    rm -f "$TUNER_ENV_FILE"
+}
+trap cleanup EXIT
+echo "=========================================="
+echo "Starting Benchmark with Configuration:"
+echo "=========================================="
+echo "MLU Count per Node: $NUM_MLUS"
+echo "Batch Size:         $BATCH_SIZE"
+echo "Sequence Length:    $SEQ_LEN"
+echo "Tensor Parallelism: $TP_DEGREE"
+echo "Pipeline Parallelism: $PP_DEGREE"
+echo "Data Parallelism:   $DP_DEGREE"
+echo "=========================================="
+
+
+torchrun \
+    --nproc-per-node=1 \
+    scripts/bench_parallel_tuner.py \
+    --num-gpus "$NUM_MLUS" \
+    --batch-size "$BATCH_SIZE" \
+    --seq-len "$SEQ_LEN"
+
+
+torchrun \
+    --nproc-per-node="$NUM_MLUS" \
+    scripts/bench_megatron.py \
+    --tp-degree "$TP_DEGREE" \
+    --pp-degree "$PP_DEGREE" \
+    --dp-degree "$DP_DEGREE" \
+    --batch-size "$BATCH_SIZE" \
+    --seq-len "$SEQ_LEN"
+
+echo "Benchmark completed successfully."
+
