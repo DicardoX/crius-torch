@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+# Author: Chunyu Xue
+
+import os
+from typing import Dict, Set, Any
+import unittest
+import logging
+from functools import partial
+from collections import OrderedDict
+import time
+import numpy as np
+
+import torch
+from torch import nn
+
+from crius.loader import (ModelLoader, ShadowModelLoader)
+from crius.core.profiler import CriusDistProfiler
+from crius.core.grid_planner.planner import CriusParallelPlanner
+from crius.model_parallel.utils import ParallelismPlan
+from crius.global_envs import global_configs, logger
+
+
+class TrainMFUTest(unittest.TestCase):
+    """ Training MFU test cases.
+    
+    This unit testcase should be executed with `torchrun`, i.e., `torchrun --nproc-per-node N script.py`.
+    """
+
+    @unittest.skip("Pass.")
+    def test_one_torch_operator(self):
+        """ Profile one torch operator in a hackable manner. """
+
+        num_warmup_steps = 5
+        num_profile_steps = 100
+        use_torch_empty_to_init_weight = True
+        batch_size = 4
+        seq_len = 1024
+        hidden_size = 4096
+        ffn_hidden_size = 4 * 4096
+
+        # GEMM
+        left_op = torch.empty((seq_len, batch_size, hidden_size), device="cuda", dtype=torch.float16) \
+            if use_torch_empty_to_init_weight else torch.randn((seq_len, batch_size, hidden_size), device="cuda", dtype=torch.float16)
+        right_op = torch.empty((ffn_hidden_size, hidden_size), device="cuda", dtype=torch.float16) \
+            if use_torch_empty_to_init_weight else torch.randn((ffn_hidden_size, hidden_size), device="cuda", dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        for _ in range(num_warmup_steps):
+            _ = torch.matmul(left_op, right_op.t())
+        torch.cuda.synchronize()
+        
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)  
+        # Measure
+        start_event.record()
+        for _ in range(num_profile_steps):
+            _ = torch.matmul(left_op, right_op.t())
+        
+        end_event.record()
+        end_event.synchronize()
+
+        op_latency = (start_event.elapsed_time(end_event) / num_profile_steps) / 1e3    # ms
+        token_thr = (batch_size * seq_len) / op_latency
+        op_flops = 2 *  batch_size * seq_len * hidden_size * ffn_hidden_size
+        flops_per_token = op_flops / (batch_size * seq_len)
+        train_tflops = (flops_per_token * token_thr) / 1e12
+        print(f"Operator latency (s): {(op_latency):.3f} | Model FLOPs per token: {flops_per_token} | " + 
+              f"Training TFLOPS: {train_tflops}")
+
+    @unittest.skip("Pass.")
+    def test_meagtron_train_mfu_gpt(self):
+        """ Run the parallelized Megatron model, using Megatron's parallelization codes. """
+
+        # import os
+        # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
+        os.environ["USE_TRANSFORMER_ENGINE"] = "False"
+        USE_TE = os.environ.get("USE_TRANSFORMER_ENGINE", "False") == "True"
+
+        # from megatron.core.model_parallel_config import ModelParallelConfig
+        from megatron.core.transformer.transformer_config import TransformerConfig
+        from megatron.core import mpu, tensor_parallel
+        from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+        from megatron.core.pipeline_parallel.schedules import get_forward_backward_func
+        from megatron.core.transformer.module import Float16Module
+        from megatron.core.utils import get_model_config, get_attr_wrapped_model
+        if USE_TE:
+            from megatron.core.models.gpt import GPTModel as MegatronGPTModel
+            from megatron.core.models.gpt.gpt_layer_specs import (
+                get_gpt_layer_local_spec,
+                get_gpt_layer_with_transformer_engine_spec,
+            )
+
+        from crius.train_backend.megatron.utils import initialize_distributed
+        from crius.train_backend.megatron.layers import ColumnParallelLinear, RowParallelLinear
+        from crius.train_backend.megatron.transformer_layer import TransformerLayer
+        from crius.train_backend.megatron.gpt_model import GPTModel
+        from crius.train_backend.megatron.training.trainer import Trainer, ModelType
+        from crius.train_backend.megatron.training.utils import (setup_model, get_train_data_iterator, 
+                                                                 get_optimizer_and_scheduler, get_input_batch)
+
+        def model_provider(
+            megatron_config: Any, max_seq_len: int, vocab_size: int, device: str,
+        ) -> nn.Module:
+            """ Model provider function. """
+            pre_process = mpu.is_pipeline_first_stage()
+            post_process = mpu.is_pipeline_last_stage()
+            return GPTModel(megatron_config, vocab_size, max_seq_len, pre_process, post_process, device=device)
+
+        def megatron_native_model_provider(
+            megatron_config: Any, transformer_layer_spec: Any, vocab_size: int, max_seq_len: int,
+            pre_process=True, post_process=True,
+        ):
+            """ Megatron-native model provider function. """
+            
+            return MegatronGPTModel(
+                config=megatron_config,
+                transformer_layer_spec=transformer_layer_spec,
+                vocab_size=vocab_size,
+                max_sequence_length=max_seq_len,
+                pre_process=pre_process,
+                post_process=post_process,
+                parallel_output=True,
+            )
+
+        model_type = ModelType.GPT
+        global_bs = 64
+        seq_len = 1024
+        num_micro_batches = 64
+        hidden_size = 4096
+        num_attention_heads = 32
+        num_layers = 32
+        dtype = torch.bfloat16
+        device = "cuda"
+        vocab_size = 50000
+        num_iters = 5
+        
+        global_configs.training_backend = "megatron"
+        global_configs.tensor_model_parallel_size = 4
+        global_configs.pipeline_model_parallel_size = 2
+        global_configs.data_parallel_size = 1
+        global_configs.only_forward = False
+
+        global_configs.num_nodes = 2
+        global_configs.num_devices_per_node = 4
+        global_configs.peak_fp16_tflops = 149.7     # NVIDIA A40
+
+        # Transformer engine
+        # NOTE: If error: AttributeError: module 'transformer_engine' has no attribute 'pytorch'
+        # Use the following commands to reinstall TE:
+        # ```
+        # export NVTE_FRAMEWORK=pytorch
+        # export NVTE_CUDA_ARCHS="86"
+        # MAX_JOBS=8 pip3 install --no-build-isolation transformer-engine[pytorch]==1.13
+        # pip3 install pyyaml
+        # ```
+        # NOTE: Using TE==1.13 also solves the error: https://github.com/NVIDIA/TransformerEngine/issues/1585
+        # NOTE: If error: AssertionError: CUDA device, driver and/or toolkit version does not 
+        # support comm+GEMM overlap with CUDA Multicast. Launch app with UB_SKIPMC=1 to try CUDA IPC instead.
+        # This is because: CUDA multicast was added in CUDA 12.1.0 and the minimum hardware requirements are 
+        # SM 9.0 (Hopper), NVSwitch 3, NVLink 4 (see requirements for SHARP).
+        # Use the following commands to use CUDA IPC.
+        # ```
+        # export UB_SKIPMC=1
+        # ```
+        tp_comm_overlap = False
+        tp_comm_bulk_wgrad=True
+        tp_comm_bulk_dgrad=True
+        tp_comm_overlap_ag=True
+        tp_comm_overlap_rs=True
+        tp_comm_overlap_rs_dgrad=False      # This undermines MFU
+        global_configs.sequence_parallel = False
+        if USE_TE:
+            tp_comm_overlap = True
+            tp_comm_bulk_wgrad=True
+            tp_comm_bulk_dgrad=True
+            tp_comm_overlap_ag=True
+            tp_comm_overlap_rs=True
+            tp_comm_overlap_rs_dgrad=False      # This undermines MFU
+            global_configs.sequence_parallel = True
+
+        # Data parallel optimizations
+        overlap_grad_reduce = True
+        if global_configs.data_parallel_size == 1:
+            overlap_grad_reduce = False
+
+        # Pipeline optimizations
+        global_configs.remove_p2p_comm_redundancy_in_hybrid_parallel = False
+
+        # Megatron-native pipeline optimizations
+        virtual_pipeline_model_parallel_size = None
+        overlap_p2p_comm = False
+        batch_p2p_comm = True
+        batch_p2p_sync = True
+        
+        # Get number of microbatches
+        # In Megatron, each DP replica constantly processes `micro_batch_size` samples per micro-batch, 
+        # only changing the number of micro-batches to maintain constant global batch size.
+        micro_batch_size =  global_bs // num_micro_batches
+        assert global_bs % (micro_batch_size * global_configs.data_parallel_size) == 0, \
+            f"Global batch size {global_bs} must be divisible by micro-batch-size {micro_batch_size} " + \
+            f"x data parallel size {global_configs.data_parallel_size}."
+        num_micro_batches = global_bs // (micro_batch_size * global_configs.data_parallel_size)
+        global_bs = micro_batch_size * num_micro_batches    # of this DP rank
+
+        global_configs.micro_batch_size = micro_batch_size
+        global_configs.sequence_length = seq_len
+        global_configs.hidden_size = hidden_size
+
+        # Init distributed
+        initialize_distributed(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+            tp_comm_overlap=tp_comm_overlap,
+        )
+        # This ensures all TP ranks share similar activations
+        model_parallel_cuda_manual_seed(1234)
+        torch.manual_seed(1234)
+        np.random.seed(1234)
+
+        # Create TransformerConfig for Megatron   
+        megatron_config = TransformerConfig(
+            tensor_model_parallel_size=global_configs.tensor_model_parallel_size,
+            pipeline_model_parallel_size=global_configs.pipeline_model_parallel_size,
+            virtual_pipeline_model_parallel_size=virtual_pipeline_model_parallel_size,
+            sequence_parallel=global_configs.sequence_parallel,
+            num_layers=num_layers,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            params_dtype=dtype,
+            pipeline_dtype=dtype,
+            fp16=(dtype == torch.float16),
+            bf16=(dtype == torch.bfloat16),
+            # TP overlap
+            tp_comm_overlap=tp_comm_overlap,
+            tp_comm_bulk_wgrad=tp_comm_bulk_wgrad,
+            tp_comm_bulk_dgrad=tp_comm_bulk_dgrad,
+            tp_comm_overlap_ag=tp_comm_overlap_ag,
+            tp_comm_overlap_rs=tp_comm_overlap_rs,
+            tp_comm_overlap_rs_dgrad=tp_comm_overlap_rs_dgrad,
+            # Pipeline overlap
+            overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            batch_p2p_sync=batch_p2p_sync,
+        )
+        # NOTE: We monkey patch all input configuratons into `megatron_config`, 
+        # instead of explicitly pass-in into the arguments of `Trainer()`.
+        setattr(megatron_config, "global_batch_size", global_bs)
+        setattr(megatron_config, "vocab_size", vocab_size)
+        setattr(megatron_config, "num_micro_batches", num_micro_batches)
+        setattr(megatron_config, "sequence_length", seq_len)
+        setattr(megatron_config, "num_iters", num_iters)
+        setattr(megatron_config, "dtype", dtype)
+        setattr(megatron_config, "overlap_grad_reduce", overlap_grad_reduce)
+
+        # Layer spec
+        if USE_TE:
+            transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec()
+
+        # Model
+        if not USE_TE:
+            model_kwargs={
+                "megatron_config": megatron_config,
+                "max_seq_len": seq_len,
+                "vocab_size": vocab_size,
+                "device": device,
+            }
+            model = model_provider(**model_kwargs) if model_provider else None
+            model = setup_model(model)
+        else:
+            pre_process, post_process = mpu.is_pipeline_first_stage(), mpu.is_pipeline_last_stage()
+            model_kwargs = {
+                "megatron_config": megatron_config,
+                "transformer_layer_spec": transformer_layer_spec,
+                "vocab_size": vocab_size,
+                "max_seq_len": seq_len,
+                "pre_process": pre_process,
+                "post_process": post_process,
+            }
+            model = megatron_native_model_provider(**model_kwargs)
+            model = setup_model(model)
+
+        train_data_iterator = get_train_data_iterator(
+            vocab_size, global_bs, num_micro_batches, seq_len, num_iters=num_iters,
+        )
+        (optimizer, opt_param_scheduler) = get_optimizer_and_scheduler(
+            model, global_bs, num_iters, fp16=(dtype == torch.float16), 
+            bf16=(dtype == torch.bfloat16), params_dtype=dtype, 
+        )
+
+        # Definition of forward step function
+        def __forward_step_func(data_iterator, model):
+            """ Vanilla forward step function. """
+
+            def __loss_func(loss_mask: torch.Tensor, output_tensor: torch.Tensor):
+                """ Loss function definition. """
+                losses = output_tensor.float()
+                loss_mask = loss_mask.view(-1).float()
+                loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+                # If you have data parallel reduce loss across data parallel groups.
+                # If pipeline parallel, loss computation is done only in last stage.
+                return loss, {"lm loss": loss}
+
+            megatron_config = get_attr_wrapped_model(model, attr="config")
+            # Input batch
+            (tokens, labels, loss_mask, 
+             attention_mask, position_ids) = get_input_batch(
+                 data_iterator=data_iterator,
+                 micro_batch_size=(
+                     megatron_config.global_batch_size // megatron_config.num_micro_batches
+                 ),
+                 seq_len=megatron_config.sequence_length,
+                 pipeline_model_parallel_size=megatron_config.pipeline_model_parallel_size,
+            )
+            # Forward
+            # with torch.cuda.amp.autocast(enabled=True, dtype=dtype):
+            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+
+            return output_tensor,  partial(__loss_func, loss_mask)
+
+        # Trainer
+        trainer = Trainer(
+            megatron_transformer_config=megatron_config,
+            forward_step_func=__forward_step_func,
+            model=model,
+            model_type=model_type,
+            train_data_iterator=train_data_iterator,
+            optimizer=optimizer,
+            opt_param_scheduler=opt_param_scheduler,
+            pipeline_strategy="1f1b",
+            forward_only=False,
+            use_pytorch_profiler=False,
+            pytorch_profiler_dp_ranks=[0, ], 
+            pytorch_profiler_tp_ranks=[0, ],
+        )
+        trainer.train(metric_types=["e2e_iter_time", "mfu", ])
+    
+    # @unittest.skip("Pass.")
+    def test_multimodal_tflops(self):
+        """ Calculate the TFLOPs of multimodal encoders and the LLM backbone. """
+
+        from crius.tools.mfu_logger import MFULogger, MFULoggerModelConfig
+
+        ratio = (0.4, 0.4, 0.2) # image, audio, text
+        batch_size = 32
+        seq_len = 16384
+        num_text_tokens = 128
+
+        patch_size = 14
+        img_h = 896
+        img_w = 896
+        in_channels = 3
+        num_image_tokens = (img_h // patch_size) * (img_w // patch_size)    # 4096
+
+        conformer_conv_kernel_size = 5
+        conformer_conv_stride = 1
+        num_audio_frames = 1000
+        audio_dim = 80
+        num_audio_tokens = (num_audio_frames - conformer_conv_kernel_size) // conformer_conv_stride + 1 # 996
+
+        weighted_multimodal_token_num = ratio[2] * num_text_tokens + ratio[0] * num_image_tokens // 4 + ratio[1] * num_audio_tokens // 16
+        num_samples = batch_size * seq_len / weighted_multimodal_token_num
+        num_image_samples = num_samples * ratio[0]
+        num_audio_samples = num_samples * ratio[1]
+        num_text_samples = num_samples * ratio[2]
+
+        # ViT1B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=40,
+            hidden_size=1408,
+            ffn_hidden_size=6144,
+            num_attention_heads=16,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+
+        tflops_vit1b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_image_samples,
+            sequence_length=num_image_tokens,
+        ) / 1e12
+        # Conv layer for patch embedding
+        tflops_vit1b += (
+            2 * (
+                patch_size * patch_size * in_channels
+            ) * (img_h // patch_size) * (img_w // patch_size) * mfu_logger_config.hidden_size
+        ) * num_image_samples / 1e12
+
+        print(f"ViT-1B TFLOPs: {tflops_vit1b}")
+        print(f"Per-token ViT-1B TFLOPs: {tflops_vit1b / (num_image_samples * num_image_tokens)}")
+
+        # USM Conformer-2B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=32,
+            hidden_size=1536,
+            ffn_hidden_size=1536 * 4,
+            num_attention_heads=16,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+        tflops_conformer_06b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_audio_samples,
+            sequence_length=num_audio_tokens,
+        ) / 1e12
+        # Dense layer to project audio features to hidden size
+        tflops_conformer_06b += (
+            2 * audio_dim * mfu_logger_config.hidden_size * num_audio_tokens
+        ) * num_audio_samples / 1e12
+        # Conv layer for each conformer layer
+        tflops_conformer_06b += (
+            2 * (
+                conformer_conv_kernel_size * conformer_conv_kernel_size * mfu_logger_config.hidden_size
+            ) * num_audio_tokens * mfu_logger_config.hidden_size * mfu_logger_config.num_layers
+        ) * num_audio_samples / 1e12
+
+        print(f"USM Conformer-0.6B TFLOPs: {tflops_conformer_06b}")
+        print(f"Per-token USM Conformer-0.6B TFLOPs: {tflops_conformer_06b / (num_audio_samples * num_audio_tokens)}")
+
+        # LLaMA12B
+        mfu_logger_config = MFULoggerModelConfig(
+            num_layers=36,
+            hidden_size=5120,
+            ffn_hidden_size=13824,
+            num_attention_heads=40,
+            padded_vocab_size=50000,
+        )
+        mfu_logger = MFULogger(mfu_logger_config)
+        tflops_llama12b = mfu_logger.num_transformer_floating_point_operations(
+            batch_size=num_samples,
+            sequence_length=weighted_multimodal_token_num,
+        ) / 1e12
+
+        print(f"LLaMA-12B TFLOPs: {tflops_llama12b}")
+        print(f"Per-token LLaMA-12B TFLOPs: {tflops_llama12b / (num_samples * weighted_multimodal_token_num)}")
+
+
+
+
+
+
+
+if __name__ == '__main__':
+    unittest.main()

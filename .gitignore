@@ -1,0 +1,32 @@
+
+# Miscs
+*.egg-info/*
+__pycache__
+*.log
+*.json
+_tmp*
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Profile / cache
+*.pkl
+
+# Archives
+*.tar
+*.tar.gz
+
+# Virtual env
+venv/
+.env/
+
+# IDE
+.vscode/
+.idea/

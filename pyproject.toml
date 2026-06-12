@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crius"
+description = "Flexible profiling and automated parallelism for large models."
+readme = "README.md"
+dynamic = [ "version", "dependencies" ]
+requires-python = ">=3.10"
+authors = [
+    {name = "Chunyu Xue", email = "dicardo@sjtu.edu.cn"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Development Status :: Beta",
+]
+
+[project.urls]
+Homepage = "https://github.com/DicardoX/crius-torch/"
+
+[tool.setuptools]
+dynamic.version.attr = "crius.__version__"
+dynamic.dependencies.file = "requirements.txt"
+
+# NOTE:
+packages.find.include = [ "crius*" ]
+package-data = { crius = [ "csrc/*.h", "csrc/*.cpp" ] }
