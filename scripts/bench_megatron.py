@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dp-degree", type=int, required=True)
     parser.add_argument("--batch-size", type=int, required=True)
     parser.add_argument("--seq-len", type=int, required=True)
-    parser.add_argument("--num-micro-batches", type=int, default=2)
+    parser.add_argument("--num-micro-batches", type=int, default=4)
     parser.add_argument("--hidden-size", type=int, default=4096)
     parser.add_argument("--num-attention-heads", type=int, default=32)
     parser.add_argument("--num-layers", type=int, default=8)

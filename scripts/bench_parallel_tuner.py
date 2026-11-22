@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-micro-batches", type=int, default=4)
     parser.add_argument("--hidden-size", type=int, default=4096)
     parser.add_argument("--num-attention-heads", type=int, default=32)
-    parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--vocab-size", type=int, default=50000)
     parser.add_argument("--profiled-data-path", default="./crius/offline/prof_data.pkl")
     parser.add_argument(
